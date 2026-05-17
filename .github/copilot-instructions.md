@@ -27,3 +27,8 @@
 - Prefer file-scoped tests with narrow responsibility boundaries so coverage can be reached with fewer branches per test file and with clearer ownership of failures.
 - Prefer table-driven tests when they reduce duplication without hiding intent, and use small focused assertions with clear failure messages.
 - Cover success paths, owned error paths, and relevant boundaries. Use mocks, fakes, or stubs only at dependency boundaries, keep fixtures minimal, and prefer explicit setup or small local helpers over shared frameworks.
+
+## Terminal Preference
+
+- **Default terminals:** Use Git Bash or Windows Command Prompt (CMD) for interactive shells and running project commands.
+- **PowerShell:** Do not use PowerShell in project sessions unless the user explicitly requests it. Prefer `git bash` or `cmd` for consistency across contributors and automation.

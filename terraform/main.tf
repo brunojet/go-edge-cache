@@ -1,0 +1,29 @@
+terraform {
+  required_version = ">= 1.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 6.0.0, < 7.0.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+}
+
+module "media_proxy" {
+  source = "./modules/media_proxy"
+
+  bucket_name                 = var.bucket_name
+  lambda_origin_domain        = var.lambda_origin_domain
+  cloudfront_price_class      = var.cloudfront_price_class
+  tags                        = var.tags
+  aliases                     = var.aliases
+  acm_certificate_arn         = var.acm_certificate_arn
+  enable_signed_urls          = var.enable_signed_urls
+  signed_urls_public_key_pem  = var.signed_urls_public_key_pem
+  signed_urls_public_key_name = var.signed_urls_public_key_name
+  signed_urls_key_group_name  = var.signed_urls_key_group_name
+}

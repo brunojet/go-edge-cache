@@ -1,0 +1,9 @@
+# terraform.tfvars.template
+
+bucket_name = "brunojet-media-proxy-dev-845281339908"
+lambda_origin_domain = "REPLACE_WITH_FUNCTION_URL.lambda-url.us-east-1.on.aws"
+aws_region = "us-east-1"
+cloudfront_price_class = "PriceClass_100"
+
+# Tags as a map
+# tags = { Project = "go-edge-cache" Environment = "dev" }
