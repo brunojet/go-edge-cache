@@ -28,15 +28,15 @@ type SecretKeys struct {
 
 func main() {
 	domainName := flag.String("domain", "media.brunojet.com.br", "CloudFront domain name")
-	filePath := flag.String("file", "", "File path (e.g., /image.jpg)")
+	urlPath := flag.String("path", "", "URL path on CloudFront (e.g., /images/photo.jpg) — NOT a local file path")
 	secretName := flag.String("secret", "/go-edge-key-management/rotator", "Secrets Manager secret name")
 	expiresIn := flag.Int64("expires", 3600, "Expiration time in seconds from now")
 	region := flag.String("region", "us-east-1", "AWS region")
 
 	flag.Parse()
 
-	if *filePath == "" {
-		fmt.Fprintf(os.Stderr, "Error: --file is required\n")
+	if *urlPath == "" {
+		fmt.Fprintf(os.Stderr, "Error: -path is required (e.g., -path \"/images/photo.jpg\")\n")
 		os.Exit(1)
 	}
 
@@ -79,7 +79,7 @@ func main() {
 	}
 
 	// Create signed URL
-	signedURL, err := createSignedURL(ctx, *domainName, *filePath, keys.PublicKeyID, signer, *expiresIn)
+	signedURL, err := createSignedURL(ctx, *domainName, *urlPath, keys.PublicKeyID, signer, *expiresIn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create signed URL: %v\n", err)
 		os.Exit(1)
@@ -88,14 +88,14 @@ func main() {
 	fmt.Println(signedURL)
 }
 
-func createSignedURL(ctx context.Context, domain, filePath, keyPairID string, signer cryptocontracts.Signer, expiresIn int64) (string, error) {
+func createSignedURL(ctx context.Context, domain, urlPath, keyPairID string, signer cryptocontracts.Signer, expiresIn int64) (string, error) {
 	expiresAt := time.Now().Unix() + expiresIn
 
 	// CloudFront signing policy
 	policy := map[string]interface{}{
 		"Statement": []map[string]interface{}{
 			{
-				"Resource": fmt.Sprintf("https://%s%s", domain, filePath),
+				"Resource": fmt.Sprintf("https://%s%s", domain, urlPath),
 				"Condition": map[string]interface{}{
 					"DateLessThan": map[string]interface{}{
 						"AWS:EpochTime": expiresAt,
@@ -118,7 +118,7 @@ func createSignedURL(ctx context.Context, domain, filePath, keyPairID string, si
 	signatureB64 := base64.StdEncoding.EncodeToString(signature)
 
 	// Build signed URL
-	baseURL := fmt.Sprintf("https://%s%s", domain, filePath)
+	baseURL := fmt.Sprintf("https://%s%s", domain, urlPath)
 	params := url.Values{}
 	params.Set("Policy", policyB64)
 	params.Set("Signature", signatureB64)
