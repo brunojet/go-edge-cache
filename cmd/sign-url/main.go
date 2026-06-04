@@ -47,6 +47,15 @@ type CloudFrontSigner struct {
 	privateKey *rsa.PrivateKey
 }
 
+// NewCloudFrontSigner creates signer from PEM file path
+func NewCloudFrontSigner(keyPairID string, keyFilePath string) (*CloudFrontSigner, error) {
+	pemData, err := os.ReadFile(keyFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read key file: %w", err)
+	}
+	return NewCloudFrontSignerFromPEM(keyPairID, pemData)
+}
+
 // NewCloudFrontSignerFromPEM creates signer from PEM-encoded private key
 func NewCloudFrontSignerFromPEM(keyPairID string, pemData []byte) (*CloudFrontSigner, error) {
 	block, _ := pem.Decode(pemData)
