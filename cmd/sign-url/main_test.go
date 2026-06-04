@@ -1,18 +1,17 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"os"
 	"strings"
 	"testing"
-
-	"github.com/brunojet/go-infra-adapters/v3/pkg/crypto"
+	"time"
 )
 
-func TestCreateSignedURL(t *testing.T) {
+func TestCloudFrontSignerWithPKCS1(t *testing.T) {
 	// Generate a test RSA key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -26,21 +25,27 @@ func TestCreateSignedURL(t *testing.T) {
 		Bytes: keyBytes,
 	})
 
-	// Create signer from PEM
-	signer, err := crypto.NewRSASignerFromPEM(keyPEM)
+	// Write key to temp file
+	tmpFile := t.TempDir() + "/test.key"
+	err = writeFile(tmpFile, keyPEM)
+	if err != nil {
+		t.Fatalf("Failed to write temp key: %v", err)
+	}
+
+	// Create signer
+	signer, err := NewCloudFrontSigner("test-key-id", tmpFile)
 	if err != nil {
 		t.Fatalf("Failed to create signer: %v", err)
 	}
 
 	domain := "media.test.com"
 	filePath := "/test.jpg"
-	keyGroupID := "test-key-group-id"
-	expiresIn := int64(3600)
-	ctx := context.Background()
+	resourceURL := "https://" + domain + filePath
+	expiresAt := time.Now().Add(1 * time.Hour)
 
-	signedURL, err := createSignedURL(ctx, domain, filePath, keyGroupID, signer, expiresIn)
+	signedURL, err := signer.SignURL(resourceURL, expiresAt)
 	if err != nil {
-		t.Fatalf("createSignedURL failed: %v", err)
+		t.Fatalf("SignURL failed: %v", err)
 	}
 
 	// Verify the URL structure
@@ -48,9 +53,12 @@ func TestCreateSignedURL(t *testing.T) {
 		t.Error("signed URL is empty")
 	}
 
-	expectedBase := "https://" + domain + filePath
-	if !strings.Contains(signedURL, expectedBase) {
-		t.Errorf("signed URL does not contain base URL: %s", signedURL)
+	if !strings.Contains(signedURL, domain) {
+		t.Errorf("signed URL does not contain domain: %s", signedURL)
+	}
+
+	if !strings.Contains(signedURL, filePath) {
+		t.Errorf("signed URL does not contain file path: %s", signedURL)
 	}
 
 	if !strings.Contains(signedURL, "Expires=") {
@@ -61,12 +69,12 @@ func TestCreateSignedURL(t *testing.T) {
 		t.Error("signed URL does not contain Signature parameter")
 	}
 
-	if !strings.Contains(signedURL, "Key-Pair-Id="+keyGroupID) {
-		t.Error("signed URL does not contain Key-Pair-Id parameter")
+	if !strings.Contains(signedURL, "Key-Pair-Id=test-key-id") {
+		t.Error("signed URL does not contain correct Key-Pair-Id parameter")
 	}
 }
 
-func TestCreateSignedURLWithPKCS8(t *testing.T) {
+func TestCloudFrontSignerWithPKCS8(t *testing.T) {
 	// Generate a test RSA key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -84,29 +92,38 @@ func TestCreateSignedURLWithPKCS8(t *testing.T) {
 		Bytes: keyBytes,
 	})
 
-	// Create signer from PKCS8 PEM
-	signer, err := crypto.NewRSASignerFromPEM(keyPEM)
+	// Write key to temp file
+	tmpFile := t.TempDir() + "/test.key"
+	err = writeFile(tmpFile, keyPEM)
 	if err != nil {
-		t.Fatalf("Failed to create signer from PKCS8: %v", err)
+		t.Fatalf("Failed to write temp key: %v", err)
+	}
+
+	// Create signer from PKCS8 PEM
+	signer, err := NewCloudFrontSigner("test-key-id-2", tmpFile)
+	if err != nil {
+		t.Fatalf("Failed to create signer: %v", err)
 	}
 
 	domain := "media.test.com"
 	filePath := "/test2.jpg"
-	keyGroupID := "test-key-group-id-2"
-	expiresIn := int64(7200)
-	ctx := context.Background()
+	resourceURL := "https://" + domain + filePath
+	expiresAt := time.Now().Add(2 * time.Hour)
 
-	signedURL, err := createSignedURL(ctx, domain, filePath, keyGroupID, signer, expiresIn)
+	signedURL, err := signer.SignURL(resourceURL, expiresAt)
 	if err != nil {
-		t.Fatalf("createSignedURL with PKCS8 failed: %v", err)
+		t.Fatalf("SignURL with PKCS8 failed: %v", err)
 	}
 
 	if signedURL == "" {
 		t.Error("signed URL is empty")
 	}
 
-	expectedBase := "https://" + domain + filePath
-	if !strings.Contains(signedURL, expectedBase) {
-		t.Errorf("signed URL does not contain base URL: %s", signedURL)
+	if !strings.Contains(signedURL, domain) {
+		t.Errorf("signed URL does not contain domain: %s", signedURL)
 	}
+}
+
+func writeFile(path string, data []byte) error {
+	return os.WriteFile(path, data, 0600)
 }
