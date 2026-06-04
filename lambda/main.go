@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -44,8 +43,8 @@ func Handle(ctx context.Context, req *events.ALBTargetGroupRequest) (events.ALBT
 
 	log.Printf("Handling fallback request for path: %s", path)
 
-	// 1. Fetch from origin (HTTP streaming)
-	resp, contentType, err := fetchFromOrigin(ctx, path)
+	// 1. Fetch from S3 root (origin simulated at /)
+	resp, contentType, err := fetchFromS3Origin(ctx, path)
 	if err != nil {
 		log.Printf("error: origin fetch failed for %s: %v", path, err)
 		return error404(), nil
@@ -76,40 +75,33 @@ func Handle(ctx context.Context, req *events.ALBTargetGroupRequest) (events.ALBT
 	}, nil
 }
 
-// fetchFromOrigin makes HTTP GET and returns io.ReadCloser (streaming).
+// fetchFromS3Origin fetches object from S3 root (simulates origin at /).
 // Returns (body, contentType, error).
-func fetchFromOrigin(ctx context.Context, path string) (io.ReadCloser, string, error) {
-	// GET /path (without /cdn prefix)
-	// Timeout: 10s for origin
+func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string, error) {
+	// Get /path (without /cdn prefix - simulates origin at root)
+	// Timeout: 10s for S3 operation
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// TODO: Replace with actual origin endpoint from Secrets Manager
-	originURL := "https://origin.example.com" + path
+	// Remove leading slash for S3 key (S3 keys don't have leading /)
+	s3Key := path
+	if len(s3Key) > 0 && s3Key[0] == '/' {
+		s3Key = s3Key[1:]
+	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", originURL, http.NoBody)
+	// Use S3 adapter to get object
+	obj, err := bucket.GetObject(ctx, s3Key)
 	if err != nil {
-		return nil, "", fmt.Errorf("create request: %w", err)
+		return nil, "", fmt.Errorf("get object from S3: %w", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, "", fmt.Errorf("http request failed: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			log.Printf("warn: failed to close response body: %v", closeErr)
-		}
-		return nil, "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	contentType := resp.Header.Get("Content-Type")
+	// obj.Body is io.ReadCloser, obj.Info.ContentType is the media type
+	contentType := obj.Info.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
-	return resp.Body, contentType, nil
+	return obj.Body, contentType, nil
 }
 
 // uploadToS3Streaming uses storage contract with streaming (zero-copy).
