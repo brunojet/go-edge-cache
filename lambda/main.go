@@ -44,7 +44,7 @@ func Handle(ctx context.Context, req *events.ALBTargetGroupRequest) (events.ALBT
 	log.Printf("Handling fallback request for path: %s", path)
 
 	// 1. Fetch from S3 root (origin simulated at /)
-	resp, contentType, err := fetchFromS3Origin(ctx, path)
+	resp, contentType, size, err := fetchFromS3Origin(ctx, path)
 	if err != nil {
 		log.Printf("error: origin fetch failed for %s: %v", path, err)
 		return error404(), nil
@@ -58,9 +58,8 @@ func Handle(ctx context.Context, req *events.ALBTargetGroupRequest) (events.ALBT
 	// 2. Upload to S3 /cdn (streaming - NOT buffering)
 	// S3 key: cdn/images/photo.jpg (prefix without leading /)
 	s3Key := "cdn" + path
-	// Note: resp is from GetObject, but we don't have size info here
-	// Using uploadToS3Streaming with size=0 will use chunked encoding
-	err = uploadToS3Streaming(ctx, s3Key, contentType, resp)
+	// Pass size from origin GetObject to cache PutObject
+	err = uploadToS3StreamingWithSize(ctx, s3Key, contentType, resp, size)
 	if err != nil {
 		// Log error but continue - CloudFront won't cache errors
 		log.Printf("warn: failed to cache %s to S3: %v", s3Key, err)
@@ -78,8 +77,8 @@ func Handle(ctx context.Context, req *events.ALBTargetGroupRequest) (events.ALBT
 }
 
 // fetchFromS3Origin fetches object from S3 root (simulates origin at /).
-// Returns (body, contentType, error).
-func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string, error) {
+// Returns (body, contentType, size, error).
+func fetchFromS3Origin(ctx context.Context, path string) (body io.ReadCloser, contentType string, size int64, err error) {
 	// Get /path (without /cdn prefix - simulates origin at root)
 	// Timeout: 10s for S3 operation
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -99,24 +98,20 @@ func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string,
 	}
 
 	// GetObject populates obj with data (obj passed by pointer)
-	err := bucket.GetObject(ctx, s3Key, obj)
+	err = bucket.GetObject(ctx, s3Key, obj)
 	if err != nil {
-		return nil, "", fmt.Errorf("get object from S3: %w", err)
+		return nil, "", 0, fmt.Errorf("get object from S3: %w", err)
 	}
 
-	// obj.Body is io.ReadCloser, obj.Info.ContentType is the media type
-	contentType := obj.Info.ContentType
+	// obj.Body is io.ReadCloser, obj.Info.ContentType and obj.Info.Size are available
+	contentType = obj.Info.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
-	return obj.Body, contentType, nil
-}
-
-// uploadToS3Streaming uses storage contract with streaming (zero-copy).
-// Pass size=0 for unknown size; S3 SDK will use chunked encoding if needed.
-func uploadToS3Streaming(ctx context.Context, key, contentType string, body io.ReadCloser) error {
-	return uploadToS3StreamingWithSize(ctx, key, contentType, body, 0)
+	body = obj.Body
+	size = obj.Info.Size
+	return
 }
 
 // uploadToS3StreamingWithSize uploads with optional size hint.
