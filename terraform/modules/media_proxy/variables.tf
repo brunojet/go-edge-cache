@@ -15,6 +15,18 @@ variable "cloudfront_price_class" {
   default     = "PriceClass_100"
 }
 
+variable "s3_cdn_path" {
+  description = "S3 origin path prefix for CloudFront (e.g. /cdn)"
+  type        = string
+  default     = "/cdn"
+}
+
+variable "s3_cache_cleanup_days" {
+  description = "Days before removing cached objects from S3 (0 = disabled)"
+  type        = number
+  default     = 90
+}
+
 variable "force_destroy" {
   description = "Allow bucket to be destroyed even if not empty"
   type        = bool

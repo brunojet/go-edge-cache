@@ -29,7 +29,7 @@ type AWSValidationResult struct {
 
 // ValidateAWS tenta carregar credenciais da AWS, obter a identidade (STS) e listar buckets S3.
 // profile e region são opcionais; passe string vazia para usar valores padrão.
-func ValidateAWS(ctx context.Context, profile string, region string) (*AWSValidationResult, error) {
+func ValidateAWS(ctx context.Context, profile, region string) (*AWSValidationResult, error) {
 	// Timeout de operação
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()

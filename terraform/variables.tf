@@ -22,6 +22,18 @@ variable "cloudfront_price_class" {
   default     = "PriceClass_100"
 }
 
+variable "s3_cdn_path" {
+  description = "S3 origin path prefix for CloudFront"
+  type        = string
+  default     = "/cdn"
+}
+
+variable "s3_cache_cleanup_days" {
+  description = "Days before S3 lifecycle removes cached objects"
+  type        = number
+  default     = 90
+}
+
 variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)

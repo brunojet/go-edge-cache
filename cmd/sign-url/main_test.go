@@ -1,49 +1,39 @@
+// Package main provides tests for sign-url functionality.
 package main
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/pem"
-	"os"
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	cdnadapter "github.com/brunojet/go-infra-adapters/v4/pkg/cdn"
+	cryptopkg "github.com/brunojet/go-infra-adapters/v4/pkg/crypto"
 )
 
-func TestCloudFrontSignerWithPKCS1(t *testing.T) {
-	// Generate a test RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+func TestCloudFrontURLSigningWithAdapter(t *testing.T) {
+	ctx := context.Background()
+
+	// Generate test RSA key pair dynamically
+	keyGen := cryptopkg.NewRSAKeyGenerator(2048)
+	kp, err := keyGen.Generate(ctx)
 	if err != nil {
-		t.Fatalf("Failed to generate test key: %v", err)
+		t.Fatalf("Failed to generate key pair: %v", err)
 	}
 
-	// Encode as PKCS1 PEM
-	keyBytes := x509.MarshalPKCS1PrivateKey(privateKey)
-	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: keyBytes,
-	})
-
-	// Write key to temp file
-	tmpFile := t.TempDir() + "/test.key"
-	err = writeFile(tmpFile, keyPEM)
-	if err != nil {
-		t.Fatalf("Failed to write temp key: %v", err)
-	}
-
-	// Create signer
-	signer, err := NewCloudFrontSigner("test-key-id", tmpFile)
+	// Create signer using go-infra-adapters
+	signer, err := cdnadapter.NewCloudFrontSignerFromPEM("test-key-id-1", kp.PrivatePEM)
 	if err != nil {
 		t.Fatalf("Failed to create signer: %v", err)
 	}
 
 	domain := "media.test.com"
-	filePath := "/test.jpg"
+	filePath := "/cdn/test.jpg" // Note: with /cdn prefix per new architecture
 	resourceURL := "https://" + domain + filePath
 	expiresAt := time.Now().Add(1 * time.Hour)
 
-	signedURL, err := signer.SignURL(resourceURL, expiresAt)
+	// Sign URL using adapter
+	signedURL, err := signer.SignURL(ctx, resourceURL, expiresAt.Unix())
 	if err != nil {
 		t.Fatalf("SignURL failed: %v", err)
 	}
@@ -69,61 +59,42 @@ func TestCloudFrontSignerWithPKCS1(t *testing.T) {
 		t.Error("signed URL does not contain Signature parameter")
 	}
 
-	if !strings.Contains(signedURL, "Key-Pair-Id=test-key-id") {
+	if !strings.Contains(signedURL, "Key-Pair-Id=test-key-id-1") {
 		t.Error("signed URL does not contain correct Key-Pair-Id parameter")
 	}
 }
 
-func TestCloudFrontSignerWithPKCS8(t *testing.T) {
-	// Generate a test RSA key
-	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+func TestCloudFrontURLSigningDeterministic(t *testing.T) {
+	ctx := context.Background()
+
+	// Generate test RSA key pair
+	keyGen := cryptopkg.NewRSAKeyGenerator(2048)
+	kp, err := keyGen.Generate(ctx)
 	if err != nil {
-		t.Fatalf("Failed to generate test key: %v", err)
+		t.Fatalf("Failed to generate key pair: %v", err)
 	}
 
-	// Encode as PKCS8 PEM
-	keyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	if err != nil {
-		t.Fatalf("Failed to marshal key: %v", err)
-	}
-
-	keyPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: keyBytes,
-	})
-
-	// Write key to temp file
-	tmpFile := t.TempDir() + "/test.key"
-	err = writeFile(tmpFile, keyPEM)
-	if err != nil {
-		t.Fatalf("Failed to write temp key: %v", err)
-	}
-
-	// Create signer from PKCS8 PEM
-	signer, err := NewCloudFrontSigner("test-key-id-2", tmpFile)
+	signer, err := cdnadapter.NewCloudFrontSignerFromPEM("test-key-id-2", kp.PrivatePEM)
 	if err != nil {
 		t.Fatalf("Failed to create signer: %v", err)
 	}
 
-	domain := "media.test.com"
-	filePath := "/test2.jpg"
-	resourceURL := "https://" + domain + filePath
-	expiresAt := time.Now().Add(2 * time.Hour)
+	resourceURL := "https://media.test.com/cdn/video.mp4"
+	expiresAt := int64(1609459200) // Fixed timestamp for deterministic test
 
-	signedURL, err := signer.SignURL(resourceURL, expiresAt)
+	// Sign same URL twice
+	signedURL1, err := signer.SignURL(ctx, resourceURL, expiresAt)
 	if err != nil {
-		t.Fatalf("SignURL with PKCS8 failed: %v", err)
+		t.Fatalf("First SignURL failed: %v", err)
 	}
 
-	if signedURL == "" {
-		t.Error("signed URL is empty")
+	signedURL2, err := signer.SignURL(ctx, resourceURL, expiresAt)
+	if err != nil {
+		t.Fatalf("Second SignURL failed: %v", err)
 	}
 
-	if !strings.Contains(signedURL, domain) {
-		t.Errorf("signed URL does not contain domain: %s", signedURL)
+	// Signatures should be identical with same inputs
+	if signedURL1 != signedURL2 {
+		t.Errorf("signatures not deterministic: %s != %s", signedURL1, signedURL2)
 	}
-}
-
-func writeFile(path string, data []byte) error {
-	return os.WriteFile(path, data, 0600)
 }

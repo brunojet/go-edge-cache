@@ -1,3 +1,4 @@
+// Package main provides CLI to generate CloudFront signed URLs.
 package main
 
 import (
@@ -45,6 +46,13 @@ func FetchSecretPayload(ctx context.Context, secretName string) (*SecretPayload,
 }
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	domainName := flag.String("domain", "media.brunojet.com.br", "CloudFront domain name")
 	urlPath := flag.String("path", "", "URL path on CloudFront (e.g., /images/photo.jpg)")
 	expiresIn := flag.Int64("expires", 3600, "Expiration time in seconds from now")
@@ -53,8 +61,7 @@ func main() {
 	flag.Parse()
 
 	if *urlPath == "" {
-		fmt.Fprintf(os.Stderr, "Error: -path is required (e.g., -path \"/images/photo.jpg\")\n")
-		os.Exit(1)
+		return fmt.Errorf("-path is required (e.g., -path \"/images/photo.jpg\")")
 	}
 
 	// Git Bash workaround: if path starts with Git Bash root, strip it
@@ -69,8 +76,7 @@ func main() {
 	fmt.Fprintf(os.Stderr, "Fetching credentials from secret: %s\n", *secretName)
 	payload, err := FetchSecretPayload(ctx, *secretName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to fetch secret: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to fetch secret: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "✓ Secret fetched. Public Key ID: %s\n\n", payload.PublicKeyID)
@@ -78,12 +84,11 @@ func main() {
 	// Create signer from secret's private key using go-infra-adapters
 	signer, err := cdnadapter.NewCloudFrontSignerFromPEM(payload.PublicKeyID, []byte(payload.PrivatePEM))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create signer: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to create signer: %w", err)
 	}
 
-	// Build resource URL
-	resourceURL := fmt.Sprintf("https://%s%s", *domainName, *urlPath)
+	// Build resource URL with /cdn prefix (S3 origin path)
+	resourceURL := fmt.Sprintf("https://%s/cdn%s", *domainName, *urlPath)
 
 	// Calculate expiration time
 	expiresAt := time.Now().Add(time.Duration(*expiresIn) * time.Second)
@@ -91,9 +96,9 @@ func main() {
 	// Sign the URL
 	signedURL, err := signer.SignURL(ctx, resourceURL, expiresAt.Unix())
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to sign URL: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to sign URL: %w", err)
 	}
 
 	fmt.Println(signedURL)
+	return nil
 }

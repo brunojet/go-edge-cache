@@ -6,9 +6,15 @@ import (
 )
 
 func TestLoadFromEnv(t *testing.T) {
-	os.Setenv("BUCKET_NAME", "test-bucket")
-	os.Setenv("SECRET_ARN", "arn:aws:secretsmanager:region:account:secret:mysecret")
-	os.Setenv("EXTERNAL_API_BASE_URL", "https://api.example.com")
+	if err := os.Setenv("BUCKET_NAME", "test-bucket"); err != nil {
+		t.Fatalf("failed to set env: %v", err)
+	}
+	if err := os.Setenv("SECRET_ARN", "arn:aws:secretsmanager:region:account:secret:mysecret"); err != nil {
+		t.Fatalf("failed to set env: %v", err)
+	}
+	if err := os.Setenv("EXTERNAL_API_BASE_URL", "https://api.example.com"); err != nil {
+		t.Fatalf("failed to set env: %v", err)
+	}
 
 	cfg := LoadFromEnv()
 

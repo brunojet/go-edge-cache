@@ -19,6 +19,8 @@ module "media_proxy" {
   bucket_name                 = var.bucket_name
   lambda_origin_domain        = var.lambda_origin_domain
   cloudfront_price_class      = var.cloudfront_price_class
+  s3_cdn_path                 = var.s3_cdn_path
+  s3_cache_cleanup_days       = var.s3_cache_cleanup_days
   tags                        = var.tags
   aliases                     = var.aliases
   acm_certificate_arn         = var.acm_certificate_arn

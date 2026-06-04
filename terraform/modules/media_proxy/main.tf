@@ -42,6 +42,25 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "media" {
   }
 }
 
+# S3 Lifecycle: cleanup old cached objects
+resource "aws_s3_bucket_lifecycle_configuration" "media" {
+  bucket = aws_s3_bucket.media.id
+
+  rule {
+    id     = "cleanup-old-cache"
+    status = "Enabled"
+
+    filter {
+      prefix = "cdn/"
+    }
+
+    # Expire objects after configured days (default: 90)
+    expiration {
+      days = var.s3_cache_cleanup_days
+    }
+  }
+}
+
 resource "aws_cloudfront_origin_access_control" "oac" {
   name                              = "${var.bucket_name}-oac"
   description                       = "Origin Access Control for S3 origin"
@@ -81,6 +100,7 @@ resource "aws_cloudfront_distribution" "media" {
     domain_name              = aws_s3_bucket.media.bucket_regional_domain_name
     origin_id                = "s3-origin"
     origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+    origin_path              = var.s3_cdn_path
   }
 
   # Lambda Origin (condicional)

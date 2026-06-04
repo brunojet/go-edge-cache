@@ -1,3 +1,4 @@
+// Package handler provides utility functions for Lambda request handling.
 package handler
 
 // ParsePathFromParts returns the effective request path preferring rawPath when present.
