@@ -53,8 +53,8 @@ func TestCreateSignedURL(t *testing.T) {
 		t.Errorf("signed URL does not contain base URL: %s", signedURL)
 	}
 
-	if !strings.Contains(signedURL, "Policy=") {
-		t.Error("signed URL does not contain Policy parameter")
+	if !strings.Contains(signedURL, "Expires=") {
+		t.Error("signed URL does not contain Expires parameter")
 	}
 
 	if !strings.Contains(signedURL, "Signature=") {

@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/brunojet/go-infra-adapters/v3/pkg/crypto"
@@ -28,7 +28,7 @@ type SecretKeys struct {
 
 func main() {
 	domainName := flag.String("domain", "media.brunojet.com.br", "CloudFront domain name")
-	urlPath := flag.String("path", "", "URL path on CloudFront (e.g., /images/photo.jpg) — NOT a local file path")
+	urlPath := flag.String("path", "/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg", "URL path on CloudFront (e.g., /images/photo.jpg) — NOT a local file path")
 	secretName := flag.String("secret", "/go-edge-key-management/rotator", "Secrets Manager secret name")
 	expiresIn := flag.Int64("expires", 3600, "Expiration time in seconds from now")
 	region := flag.String("region", "us-east-1", "AWS region")
@@ -38,6 +38,12 @@ func main() {
 	if *urlPath == "" {
 		fmt.Fprintf(os.Stderr, "Error: -path is required (e.g., -path \"/images/photo.jpg\")\n")
 		os.Exit(1)
+	}
+
+	// Git Bash workaround: if path starts with Git Bash root, strip it
+	// Git Bash mounts C:/Program Files/Git as / for POSIX compatibility
+	if strings.HasPrefix(*urlPath, "C:/Program Files/Git") {
+		*urlPath = strings.TrimPrefix(*urlPath, "C:/Program Files/Git")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -90,39 +96,36 @@ func main() {
 
 func createSignedURL(ctx context.Context, domain, urlPath, keyPairID string, signer cryptocontracts.Signer, expiresIn int64) (string, error) {
 	expiresAt := time.Now().Unix() + expiresIn
+	resource := fmt.Sprintf("https://%s%s", domain, urlPath)
 
-	// CloudFront signing policy
-	policy := map[string]interface{}{
-		"Statement": []map[string]interface{}{
-			{
-				"Resource": fmt.Sprintf("https://%s%s", domain, urlPath),
-				"Condition": map[string]interface{}{
-					"DateLessThan": map[string]interface{}{
-						"AWS:EpochTime": expiresAt,
-					},
-				},
-			},
-		},
-	}
+	// CloudFront Custom Policy (matches AWS CLI format)
+	// String to sign: Resource + Expires
+	stringToSign := fmt.Sprintf("%s?Expires=%d", resource, expiresAt)
 
-	policyJSON, _ := json.Marshal(policy)
-	policyB64 := base64.StdEncoding.EncodeToString(policyJSON)
-
-	// Sign policy using adapter signer
-	// Signer expects raw bytes and returns the signature
-	signature, err := signer.Sign(ctx, policyJSON)
+	// Sign the string
+	signature, err := signer.Sign(ctx, []byte(stringToSign))
 	if err != nil {
 		return "", fmt.Errorf("sign policy: %w", err)
 	}
 
+	// URL-safe base64 encoding (replace +/ with -~ as per AWS)
 	signatureB64 := base64.StdEncoding.EncodeToString(signature)
+	signatureB64 = replaceBase64URLSafe(signatureB64)
 
-	// Build signed URL
+	// Build signed URL - matches AWS CLI format exactly
 	baseURL := fmt.Sprintf("https://%s%s", domain, urlPath)
 	params := url.Values{}
-	params.Set("Policy", policyB64)
+	params.Set("Expires", fmt.Sprintf("%d", expiresAt))
 	params.Set("Signature", signatureB64)
 	params.Set("Key-Pair-Id", keyPairID)
 
 	return baseURL + "?" + params.Encode(), nil
+}
+
+// replaceBase64URLSafe converts standard base64 to CloudFront's URL-safe format
+// Standard base64: + and / → CloudFront: - and ~
+func replaceBase64URLSafe(b64 string) string {
+	b64 = b64[:len(b64)-len(b64)%4] // Remove padding
+	b64 = strings.NewReplacer("+", "-", "/", "~").Replace(b64)
+	return b64
 }
