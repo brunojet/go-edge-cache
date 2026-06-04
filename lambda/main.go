@@ -58,6 +58,8 @@ func Handle(ctx context.Context, req *events.ALBTargetGroupRequest) (events.ALBT
 	// 2. Upload to S3 /cdn (streaming - NOT buffering)
 	// S3 key: cdn/images/photo.jpg (prefix without leading /)
 	s3Key := "cdn" + path
+	// Note: resp is from GetObject, but we don't have size info here
+	// Using uploadToS3Streaming with size=0 will use chunked encoding
 	err = uploadToS3Streaming(ctx, s3Key, contentType, resp)
 	if err != nil {
 		// Log error but continue - CloudFront won't cache errors
@@ -112,13 +114,19 @@ func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string,
 }
 
 // uploadToS3Streaming uses storage contract with streaming (zero-copy).
+// Pass size=0 for unknown size; S3 SDK will use chunked encoding if needed.
 func uploadToS3Streaming(ctx context.Context, key, contentType string, body io.ReadCloser) error {
+	return uploadToS3StreamingWithSize(ctx, key, contentType, body, 0)
+}
+
+// uploadToS3StreamingWithSize uploads with optional size hint.
+func uploadToS3StreamingWithSize(ctx context.Context, key, contentType string, body io.ReadCloser, size int64) error {
 	// Stream from origin → S3 directly (no buffering in memory)
 	obj := &storagecontracts.BucketObject{
 		Info: storagecontracts.ObjectInfo{
 			Key:         key,
 			ContentType: contentType,
-			// Size can be left as 0 if unknown (S3 will detect)
+			Size:        size, // Set size if known, 0 otherwise
 		},
 		Body: body, // io.ReadCloser from origin becomes stream to S3
 	}
@@ -129,7 +137,11 @@ func uploadToS3Streaming(ctx context.Context, key, contentType string, body io.R
 		return fmt.Errorf("put object failed: %w", err)
 	}
 
-	log.Printf("uploaded to S3: %s (size detection via streaming)", key)
+	if size > 0 {
+		log.Printf("uploaded to S3: %s (%d bytes)", key, size)
+	} else {
+		log.Printf("uploaded to S3: %s (chunked)", key)
+	}
 	return nil
 }
 

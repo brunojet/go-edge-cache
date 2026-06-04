@@ -33,7 +33,7 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 
 	// Set endpoint if provided (AWS SDK will pick it up)
@@ -125,7 +125,7 @@ func run() error {
 
 	// 3. Stream to CDN cache
 	if *verbose {
-		log.Printf("Step 3: Uploading to cache: %s\n", cdnKey)
+		log.Printf("Step 3: Uploading to cache: %s (size: %d bytes)\n", cdnKey, originObj.Info.Size)
 	}
 	fmt.Printf("Step 3: Caching to: %s\n", cdnKey)
 
@@ -133,6 +133,7 @@ func run() error {
 		Info: storagecontracts.ObjectInfo{
 			Key:         cdnKey,
 			ContentType: originObj.Info.ContentType,
+			Size:        originObj.Info.Size, // Include size from origin object
 		},
 		Body: originObj.Body,
 	}
@@ -142,7 +143,7 @@ func run() error {
 		return fmt.Errorf("failed to cache object: %w", err)
 	}
 
-	fmt.Printf("✓ Cached successfully\n\n")
+	fmt.Printf("✓ Cached successfully (%d bytes)\n\n", originObj.Info.Size)
 	fmt.Printf("=== Next request will hit cache ===\n")
 
 	return nil
