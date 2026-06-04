@@ -102,6 +102,39 @@ aws s3 ls s3://test-bucket/ --recursive
   -v
 ```
 
+## 8. Real World Example
+
+Test with actual image filename (like real CDN):
+
+```bash
+# First, create the test file
+echo "fake image content" > /tmp/cyril-mzn-WSvth_lwCi0-unsplash.jpg
+
+# Upload to S3 at origin (root)
+export AWS_ENDPOINT_URL_S3=http://localhost:4566
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+
+aws s3 cp /tmp/cyril-mzn-WSvth_lwCi0-unsplash.jpg \
+  s3://test-bucket/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg
+
+# Test with fallback CLI (simulates CDN request)
+./fallback \
+  -bucket test-bucket \
+  -endpoint http://localhost:4566 \
+  -path /images/cyril-mzn-WSvth_lwCi0-unsplash.jpg \
+  -v
+```
+
+This simulates real CDN flow:
+- CDN URL: `https://media.brunojet.com.br/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg`
+- CloudFront origin_path: `/cdn`
+- CloudFront requests: `S3: /cdn/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg` (miss)
+- Lambda fallback: `S3: /images/cyril-mzn-WSvth_lwCi0-unsplash.jpg` (hit)
+- Caches to: `S3: /cdn/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg`
+
+See [REAL_WORLD_EXAMPLE.md](REAL_WORLD_EXAMPLE.md) for complete details.
+
 ## Architecture Overview
 
 ```

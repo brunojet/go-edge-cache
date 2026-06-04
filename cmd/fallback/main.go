@@ -17,8 +17,10 @@ var (
 	bucketName = flag.String("bucket", "brunojet-media-proxy-dev", "S3 bucket name")
 	endpoint   = flag.String("endpoint", "", "S3 endpoint URL (for LocalStack: http://localhost:4566)")
 	region     = flag.String("region", "us-east-1", "AWS region")
-	testPath   = flag.String("path", "/test.jpg", "Path to test (e.g., /images/photo.jpg)")
-	verbose    = flag.Bool("v", false, "Verbose logging")
+	// testPath simulates: https://media.brunojet.com.br/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg
+	// CloudFront adds /cdn prefix when looking in S3, Lambda fetches from root
+	testPath = flag.String("path", "/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg", "Path to test (e.g., /images/photo.jpg)")
+	verbose  = flag.Bool("v", false, "Verbose logging")
 )
 
 func main() {
