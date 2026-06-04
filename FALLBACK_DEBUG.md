@@ -144,6 +144,39 @@ sam local invoke HandlerFunction -e events/test-event.json
 
 3. Set breakpoints in your IDE and run with debugger on the local Lambda emulation.
 
+## Troubleshooting
+
+### Error: MissingContentLength (411)
+```
+error: failed to cache object: operation error S3: PutObject, 
+  https response error StatusCode: 411, 
+  RequestID: ..., 
+  api error MissingContentLength: You must provide the Content-Length HTTP header
+```
+
+**Cause:** S3 requires Content-Length header for PutObject
+
+**Solution:** Include Size in ObjectInfo
+```go
+obj := &storagecontracts.BucketObject{
+  Info: storagecontracts.ObjectInfo{
+    Key:         key,
+    ContentType: contentType,
+    Size:        size,  // Include this!
+  },
+  Body: body,
+}
+```
+
+For `cmd/fallback`:
+- Size is known from GetObject: `originObj.Info.Size`
+- Always pass it to PutObject
+
+For Lambda handler:
+- Size unknown upfront (streaming from origin)
+- Pass `size=0` and S3 SDK uses chunked encoding
+- Or fetch size first, then stream
+
 ## Tips
 
 - Use `-v` flag to see detailed logs
@@ -156,3 +189,4 @@ sam local invoke HandlerFunction -e events/test-event.json
   docker logs -f localstack
   ```
 - Test with different file types: `.jpg`, `.png`, `.json`, `.html`
+- For PutObject errors, verify ObjectInfo.Size is set correctly
