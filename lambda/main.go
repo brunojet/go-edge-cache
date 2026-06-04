@@ -85,12 +85,19 @@ func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string,
 
 	// Remove leading slash for S3 key (S3 keys don't have leading /)
 	s3Key := path
-	if len(s3Key) > 0 && s3Key[0] == '/' {
+	if s3Key != "" && s3Key[0] == '/' {
 		s3Key = s3Key[1:]
 	}
 
-	// Use S3 adapter to get object
-	obj, err := bucket.GetObject(ctx, s3Key)
+	// Create BucketObject to receive data from GetObject
+	obj := &storagecontracts.BucketObject{
+		Info: storagecontracts.ObjectInfo{
+			Key: s3Key,
+		},
+	}
+
+	// GetObject populates obj with data (obj passed by pointer)
+	err := bucket.GetObject(ctx, s3Key, obj)
 	if err != nil {
 		return nil, "", fmt.Errorf("get object from S3: %w", err)
 	}
