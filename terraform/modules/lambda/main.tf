@@ -5,8 +5,12 @@ resource "aws_lambda_function" "zip" {
   role          = var.role_arn
   handler       = var.handler
   runtime       = var.runtime
-  s3_bucket     = var.s3_bucket
-  s3_key        = var.s3_key
+
+  # Use filename if provided, otherwise fall back to S3 (for backward compatibility)
+  filename         = var.filename != "" ? var.filename : null
+  s3_bucket        = var.filename == "" ? var.s3_bucket : null
+  s3_key           = var.filename == "" ? var.s3_key : null
+  source_code_hash = var.filename != "" ? filebase64sha256(var.filename) : null
 
   memory_size = var.memory_size
   timeout     = var.timeout

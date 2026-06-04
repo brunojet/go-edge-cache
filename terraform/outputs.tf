@@ -38,14 +38,9 @@ output "lambda_function_url" {
   value       = var.enable_lambda ? module.lambda.function_url : ""
 }
 
-output "lambda_s3_bucket" {
-  description = "S3 bucket containing Lambda packages (if created)"
-  value       = var.enable_lambda ? try(aws_s3_bucket.lambda_packages[0].id, var.lambda_s3_bucket) : ""
-}
-
-output "lambda_s3_key" {
-  description = "S3 key for Lambda zip package"
-  value       = var.enable_lambda ? local.effective_lambda_s3_key : ""
+output "lambda_zip_path" {
+  description = "Local file path to Lambda zip package"
+  value       = var.enable_lambda ? local.lambda_zip_path : ""
 }
 
 output "secrets_id" {

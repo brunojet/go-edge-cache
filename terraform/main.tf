@@ -13,6 +13,9 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Get current AWS account ID for ARN construction
+data "aws_caller_identity" "current" {}
+
 # Automatically use Lambda Function URL if available
 # Extract hostname from Function URL (remove https:// prefix and trailing /)
 locals {

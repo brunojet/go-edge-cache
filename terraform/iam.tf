@@ -10,6 +10,14 @@ module "iam_lambda" {
 		Version = "2012-10-17"
 		Statement = [
 			{
+				# List bucket (required by S3 SDK for GetObject operations)
+				Effect = "Allow"
+				Action = [
+					"s3:ListBucket"
+				]
+				Resource = module.media_proxy.bucket_arn
+			},
+			{
 				# Read from S3 root (origin simulation)
 				Effect = "Allow"
 				Action = [
@@ -24,6 +32,14 @@ module "iam_lambda" {
 					"s3:PutObject"
 				]
 				Resource = "${module.media_proxy.bucket_arn}/cdn/*"
+			},
+			{
+				# Read CloudFront signing credentials from Secrets Manager
+				Effect = "Allow"
+				Action = [
+					"secretsmanager:GetSecretValue"
+				]
+				Resource = "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:/go-edge-key-management/*"
 			}
 		]
 	}) : ""

@@ -16,14 +16,20 @@ variable "package_type" {
   default     = "Zip"
 }
 
+variable "filename" {
+  description = "Local file path to Lambda code (when using Zip with local file)"
+  type        = string
+  default     = ""
+}
+
 variable "s3_bucket" {
-  description = "S3 bucket holding Lambda code (when using Zip)"
+  description = "S3 bucket holding Lambda code (when using Zip with S3)"
   type        = string
   default     = ""
 }
 
 variable "s3_key" {
-  description = "S3 key for Lambda code (when using Zip)"
+  description = "S3 key for Lambda code (when using Zip with S3)"
   type        = string
   default     = ""
 }
