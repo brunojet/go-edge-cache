@@ -128,9 +128,9 @@ variable "lambda_image_uri" {
 }
 
 variable "lambda_runtime" {
-  description = "Lambda runtime"
+  description = "Lambda runtime (go1.x is deprecated, use provided.al2 for Go with custom bootstrap)"
   type        = string
-  default     = "go1.x"
+  default     = "provided.al2"
 }
 
 variable "lambda_handler" {

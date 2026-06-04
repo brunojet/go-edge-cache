@@ -23,7 +23,7 @@ tags = {
 # Lambda configuration
 enable_lambda           = true
 lambda_function_name    = "brunojet-media-proxy-dev-origin-lambda"
-lambda_runtime          = "go1.x"
+lambda_runtime          = "provided.al2"  # Go with custom bootstrap
 lambda_handler          = "main"
 lambda_memory_size      = 512
 lambda_timeout          = 30
