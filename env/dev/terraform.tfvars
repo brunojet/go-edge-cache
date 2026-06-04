@@ -21,15 +21,16 @@ tags = {
 }
 
 # Lambda configuration
-enable_lambda           = true
-lambda_function_name    = "brunojet-media-proxy-dev-origin-lambda"
-lambda_runtime          = "provided.al2"  # Go with custom bootstrap
-lambda_handler          = "main"
-lambda_memory_size      = 512
-lambda_timeout          = 30
-lambda_package_type     = "Zip"
-lambda_publish          = false
-lambda_create_function_url = false
+enable_lambda              = true
+lambda_function_name       = "brunojet-media-proxy-dev-origin-lambda"
+lambda_runtime             = "provided.al2"  # Go with custom bootstrap
+lambda_handler             = "main"
+lambda_memory_size         = 512
+lambda_timeout             = 30
+lambda_package_type        = "Zip"
+lambda_publish             = false
+lambda_create_function_url = true           # Enable Function URL for CloudFront
+lambda_function_url_auth_type = "NONE"      # Public, CloudFront signed with OAC
 
 # Lambda environment variables (for configuration)
 lambda_environment = {
