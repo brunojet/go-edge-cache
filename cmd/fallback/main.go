@@ -24,9 +24,8 @@ var (
 )
 
 func init() {
-	// Load configuration from environment variables
+	// Load S3 configuration from environment
 	s3BucketName = os.Getenv("S3_BUCKET")
-	// Default to dev bucket if not set (for local testing)
 	if s3BucketName == "" {
 		s3BucketName = "brunojet-media-proxy-dev"
 		log.Printf("S3_BUCKET not set, using default: %s", s3BucketName)
@@ -37,7 +36,7 @@ func init() {
 		awsRegion = "us-east-1"
 	}
 
-	log.Printf("Initializing Lambda handler: bucket=%s region=%s", s3BucketName, awsRegion)
+	log.Printf("Initializing Lambda fallback: bucket=%s region=%s", s3BucketName, awsRegion)
 
 	// Initialize StorageAPI (once on cold start)
 	var err error

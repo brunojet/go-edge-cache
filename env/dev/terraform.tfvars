@@ -31,17 +31,11 @@ lambda_package_type     = "Zip"
 lambda_publish          = false
 lambda_create_function_url = false
 
-# Lambda environment variables
+# Lambda environment variables (for configuration)
 lambda_environment = {
-  S3_BUCKET   = "brunojet-media-proxy-dev"
-  AWS_REGION  = "us-east-1"
-  # SECRET_ARN and SECRET_NAME can be added if using key-management secrets
+  S3_BUCKET  = "brunojet-media-proxy-dev"
+  AWS_REGION = "us-east-1"
 }
-
-# Secrets Manager configuration (for key-management)
-enable_secrets = false
-# secrets_name = "/go-edge-key-management/rotator"
-# secrets_value = ""  # Managed externally by key-management service
 
 # S3 Cache Settings
 s3_cdn_path           = "/cdn"
