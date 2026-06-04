@@ -16,7 +16,10 @@ import (
 	"strings"
 	"time"
 
-	secretaws "github.com/brunojet/go-infra-adapters/v3/pkg/secret/aws"
+	// TODO: When go-infra-adapters v3.4.0+ is released with CloudFrontURLSigner,
+	// add: cryptoadapters "github.com/brunojet/go-infra-adapters/v4/pkg/crypto"
+	// See: https://github.com/brunojet/go-infra-adapters/tree/feature/cloudfront-signing
+	secretaws "github.com/brunojet/go-infra-adapters/v4/pkg/secret/aws"
 )
 
 // SecretPayload matches go-edge-key-management structure
@@ -30,7 +33,15 @@ type SecretPayload struct {
 	PublicKeyID  string `json:"public_key_id"`
 }
 
-// CloudFrontSigner signs CloudFront URLs using Canned Policy (matches AWS CLI)
+// CloudFrontSigner signs CloudFront URLs using AWS Canned Policy format.
+// This is a local implementation for now. When go-infra-adapters v3.4.0+ is released,
+// this can be replaced with the adapter's CDNURLSigner interface:
+//
+//   ctx := context.Background()
+//   signer, _ := cryptoadapters.NewCloudFrontURLSignerFromPEM(payload.PublicKeyID, []byte(payload.PrivatePEM))
+//   signedURL, _ := signer.SignURL(ctx, resourceURL, time.Now().Add(duration).Unix())
+//
+// See: https://github.com/brunojet/go-infra-adapters/tree/feature/cloudfront-signing
 type CloudFrontSigner struct {
 	keyPairID  string
 	privateKey *rsa.PrivateKey
