@@ -1,150 +1,156 @@
-// Package main provides local CLI for testing Lambda fallback handler.
+// Package main implements Lambda handler for CloudFront fallback.
 package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
+	"io"
 	"log"
-	"os"
 	"time"
+
+	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-lambda-go/lambda"
 
 	storageadapters "github.com/brunojet/go-infra-adapters/v4/pkg/storage/aws/s3"
 	storagecontracts "github.com/brunojet/go-infra-adapters/v4/pkg/storage/contracts"
 )
 
 var (
-	bucketName = flag.String("bucket", "brunojet-media-proxy-dev", "S3 bucket name")
-	endpoint   = flag.String("endpoint", "", "S3 endpoint URL (for LocalStack: http://localhost:4566)")
-	region     = flag.String("region", "us-east-1", "AWS region")
-	// testPath simulates: https://media.brunojet.com.br/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg
-	// CloudFront adds /cdn prefix when looking in S3, Lambda fetches from root
-	testPath = flag.String("path", "/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg", "Path to test (e.g., /images/photo.jpg)")
-	verbose  = flag.Bool("v", false, "Verbose logging")
+	storageAPI storagecontracts.StorageAPI
+	bucket     storagecontracts.BucketAdapter
 )
 
-func main() {
-	flag.Parse()
+func init() {
+	// Initialize StorageAPI (once on cold start)
+	var err error
+	storageAPI, err = storageadapters.NewStorageAPI(
+		storageadapters.WithRegion("us-east-1"),
+	)
+	if err != nil {
+		log.Fatalf("failed to create storage API: %v", err)
+	}
 
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	// Create adapter for bucket
+	bucket, err = storageAPI.NewBucket("brunojet-media-proxy-dev")
+	if err != nil {
+		log.Fatalf("failed to create bucket adapter: %v", err)
 	}
 }
 
-func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+// Handle is the Lambda handler entry point.
+func Handle(ctx context.Context, req *events.ALBTargetGroupRequest) (events.ALBTargetGroupResponse, error) {
+	path := req.Path // e.g., /images/photo.jpg
+
+	log.Printf("Handling fallback request for path: %s", path)
+
+	// 1. Fetch from S3 root (origin simulated at /)
+	resp, contentType, size, err := fetchFromS3Origin(ctx, path)
+	if err != nil {
+		log.Printf("error: origin fetch failed for %s: %v", path, err)
+		return error404(), nil
+	}
+	defer func() {
+		if closeErr := resp.Close(); closeErr != nil {
+			log.Printf("warn: failed to close response: %v", closeErr)
+		}
+	}()
+
+	// 2. Upload to S3 /cdn (streaming - NOT buffering)
+	// S3 key: cdn/images/photo.jpg (prefix without leading /)
+	s3Key := "cdn" + path
+	// Pass size from origin GetObject to cache PutObject
+	err = uploadToS3StreamingWithSize(ctx, s3Key, contentType, resp, size)
+	if err != nil {
+		// Log error but continue - CloudFront won't cache errors
+		log.Printf("warn: failed to cache %s to S3: %v", s3Key, err)
+	}
+
+	// 3. Return success - next requests will come from S3
+	log.Printf("success: fallback served for %s", path)
+	return events.ALBTargetGroupResponse{
+		StatusCode: 200,
+		Body:       "OK",
+		Headers: map[string]string{
+			"Content-Type": contentType,
+		},
+	}, nil
+}
+
+// fetchFromS3Origin fetches object from S3 root (simulates origin at /).
+// Returns (body, contentType, size, error).
+func fetchFromS3Origin(ctx context.Context, path string) (body io.ReadCloser, contentType string, size int64, err error) {
+	// Get /path (without /cdn prefix - simulates origin at root)
+	// Timeout: 10s for S3 operation
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// Set endpoint if provided (AWS SDK will pick it up)
-	if *endpoint != "" {
-		if err := os.Setenv("AWS_ENDPOINT_URL_S3", *endpoint); err != nil {
-			return fmt.Errorf("failed to set endpoint env: %w", err)
-		}
+	// Remove leading slash for S3 key (S3 keys don't have leading /)
+	s3Key := path
+	if s3Key != "" && s3Key[0] == '/' {
+		s3Key = s3Key[1:]
 	}
 
-	if *verbose {
-		log.Printf("Config: bucket=%s region=%s endpoint=%s path=%s\n", *bucketName, *region, *endpoint, *testPath)
-	}
-
-	// Create storage API
-	storageAPI, err := storageadapters.NewStorageAPI(
-		storageadapters.WithRegion(*region),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create storage API: %w", err)
-	}
-
-	bucket, err := storageAPI.NewBucket(*bucketName)
-	if err != nil {
-		return fmt.Errorf("failed to create bucket adapter: %w", err)
-	}
-
-	fmt.Printf("\n=== Lambda Fallback Simulation ===\n")
-	fmt.Printf("Bucket: %s\n", *bucketName)
-	fmt.Printf("Region: %s\n", *region)
-	if *endpoint != "" {
-		fmt.Printf("Endpoint: %s\n", *endpoint)
-	}
-	fmt.Printf("Path: %s\n\n", *testPath)
-
-	// 1. Try to get from /cdn prefix (as CloudFront would)
-	cdnKey := "cdn" + *testPath
-	if *verbose {
-		log.Printf("Step 1: Trying to fetch from CDN cache: %s\n", cdnKey)
-	}
-
+	// Create BucketObject to receive data from GetObject
 	obj := &storagecontracts.BucketObject{
 		Info: storagecontracts.ObjectInfo{
-			Key: cdnKey,
+			Key: s3Key,
 		},
 	}
 
-	err = bucket.GetObject(ctx, cdnKey, obj)
-	if err == nil {
-		// Cache hit
-		fmt.Printf("✓ Cache HIT: Found %s\n", cdnKey)
-		fmt.Printf("  Content-Type: %s\n", obj.Info.ContentType)
-		fmt.Printf("  Size: %d bytes\n\n", obj.Info.Size)
-		if closeErr := obj.Body.Close(); closeErr != nil {
-			log.Printf("warn: failed to close body: %v", closeErr)
-		}
-		return nil
-	}
-
-	if *verbose {
-		log.Printf("Cache miss: %v\n", err)
-	}
-	fmt.Printf("✗ Cache MISS: Not found in %s\n", cdnKey)
-
-	// 2. Fallback to origin (S3 root without /cdn)
-	originKey := *testPath
-	if originKey != "" && originKey[0] == '/' {
-		originKey = originKey[1:]
-	}
-
-	if *verbose {
-		log.Printf("Step 2: Fetching from origin: %s\n", originKey)
-	}
-	fmt.Printf("\nStep 2: Fetching from origin: %s\n", originKey)
-
-	originObj := &storagecontracts.BucketObject{
-		Info: storagecontracts.ObjectInfo{
-			Key: originKey,
-		},
-	}
-
-	err = bucket.GetObject(ctx, originKey, originObj)
+	// GetObject populates obj with data (obj passed by pointer)
+	err = bucket.GetObject(ctx, s3Key, obj)
 	if err != nil {
-		return fmt.Errorf("origin fetch failed: %w", err)
+		return nil, "", 0, fmt.Errorf("get object from S3: %w", err)
 	}
 
-	fmt.Printf("✓ Origin FOUND: %s\n", originKey)
-	fmt.Printf("  Content-Type: %s\n", originObj.Info.ContentType)
-	fmt.Printf("  Size: %d bytes\n\n", originObj.Info.Size)
-
-	// 3. Stream to CDN cache
-	if *verbose {
-		log.Printf("Step 3: Uploading to cache: %s (size: %d bytes)\n", cdnKey, originObj.Info.Size)
+	// obj.Body is io.ReadCloser, obj.Info.ContentType and obj.Info.Size are available
+	contentType = obj.Info.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
 	}
-	fmt.Printf("Step 3: Caching to: %s\n", cdnKey)
 
-	cacheObj := &storagecontracts.BucketObject{
+	body = obj.Body
+	size = obj.Info.Size
+	return
+}
+
+// uploadToS3StreamingWithSize uploads with optional size hint.
+func uploadToS3StreamingWithSize(ctx context.Context, key, contentType string, body io.ReadCloser, size int64) error {
+	// Stream from origin → S3 directly (no buffering in memory)
+	obj := &storagecontracts.BucketObject{
 		Info: storagecontracts.ObjectInfo{
-			Key:         cdnKey,
-			ContentType: originObj.Info.ContentType,
-			Size:        originObj.Info.Size, // Include size from origin object
+			Key:         key,
+			ContentType: contentType,
+			Size:        size, // Set size if known, 0 otherwise
 		},
-		Body: originObj.Body,
+		Body: body, // io.ReadCloser from origin becomes stream to S3
 	}
 
-	err = bucket.PutObject(ctx, cacheObj)
+	err := bucket.PutObject(ctx, obj)
+	// bucket.PutObject closes obj.Body automatically
 	if err != nil {
-		return fmt.Errorf("failed to cache object: %w", err)
+		return fmt.Errorf("put object failed: %w", err)
 	}
 
-	fmt.Printf("✓ Cached successfully (%d bytes)\n\n", originObj.Info.Size)
-	fmt.Printf("=== Next request will hit cache ===\n")
-
+	if size > 0 {
+		log.Printf("uploaded to S3: %s (%d bytes)", key, size)
+	} else {
+		log.Printf("uploaded to S3: %s (chunked)", key)
+	}
 	return nil
+}
+
+// error404 returns a 404 response
+func error404() events.ALBTargetGroupResponse {
+	return events.ALBTargetGroupResponse{
+		StatusCode: 404,
+		Body:       "Not Found",
+		Headers: map[string]string{
+			"Content-Type": "text/plain",
+		},
+	}
+}
+
+func main() {
+	lambda.Start(Handle)
 }
