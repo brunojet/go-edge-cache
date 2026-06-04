@@ -7,10 +7,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.20
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.102.2
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.3
-	github.com/brunojet/go-infra-adapters/v4 v4.0.0-dev
+	github.com/brunojet/go-infra-adapters/v4 v4.0.0
 )
-
-replace github.com/brunojet/go-infra-adapters/v4 => ../go-infra-adapters
 
 require (
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.11 // indirect
@@ -28,5 +26,4 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.2 // indirect
 	github.com/aws/smithy-go v1.26.0 // indirect
-	github.com/brunojet/go-infra-adapters/v3 v3.3.0 // indirect
 )
