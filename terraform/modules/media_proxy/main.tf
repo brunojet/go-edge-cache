@@ -5,6 +5,8 @@ data "aws_caller_identity" "current" {}
 
 locals {
   has_lambda_origin = var.lambda_origin_domain != null && var.lambda_origin_domain != ""
+  # Determine which key group to use for signed URLs
+  signed_url_key_group_id = var.existing_cloudfront_key_group_id != "" ? var.existing_cloudfront_key_group_id : (length(aws_cloudfront_key_group.signed) > 0 ? aws_cloudfront_key_group.signed[0].id : "")
 }
 
 resource "aws_s3_bucket" "media" {
@@ -133,8 +135,8 @@ resource "aws_cloudfront_distribution" "media" {
     min_ttl     = 0
     default_ttl = 86400
     max_ttl     = 31536000
-    # Trusted key groups for signed URLs (empty if not enabled)
-    trusted_key_groups = var.enable_signed_urls && length(aws_cloudfront_key_group.signed) > 0 ? [aws_cloudfront_key_group.signed[0].id] : []
+    # Trusted key groups for signed URLs (use existing or newly created)
+    trusted_key_groups = var.enable_signed_urls && local.signed_url_key_group_id != "" ? [local.signed_url_key_group_id] : []
   }
 
   restrictions {

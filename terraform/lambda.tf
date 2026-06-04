@@ -8,7 +8,7 @@ module "lambda" {
 	s3_bucket                = local.effective_lambda_s3_bucket
 	s3_key                   = local.effective_lambda_s3_key
 	image_uri                = var.lambda_image_uri
-	role_arn                 = local.bootstrap_iam_role_arn != "" ? local.bootstrap_iam_role_arn : module.iam_lambda.role_arn
+	role_arn                 = module.iam_lambda.role_arn
 	runtime                  = var.lambda_runtime
 	handler                  = var.lambda_handler
 	environment              = var.lambda_environment
@@ -26,7 +26,7 @@ module "lambda" {
 
 module "secrets" {
 	source        = "./modules/secrets"
-	create        = var.enable_secrets && local.bootstrap_secret_arn == ""
+	create        = var.enable_secrets
 	name          = var.secrets_name
 	secret_string = var.secrets_value
 	tags          = var.tags

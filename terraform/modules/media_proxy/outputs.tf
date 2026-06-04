@@ -19,6 +19,6 @@ output "cloudfront_signed_public_key_id" {
 }
 
 output "cloudfront_signed_key_group_id" {
-  description = "CloudFront key group id created for signed URLs (empty if not created)"
-  value       = length(aws_cloudfront_key_group.signed) > 0 ? aws_cloudfront_key_group.signed[0].id : ""
+  description = "CloudFront key group id (either existing or created for signed URLs)"
+  value       = local.signed_url_key_group_id
 }

@@ -28,4 +28,6 @@ module "media_proxy" {
   signed_urls_public_key_pem  = var.signed_urls_public_key_pem
   signed_urls_public_key_name = var.signed_urls_public_key_name
   signed_urls_key_group_name  = var.signed_urls_key_group_name
+  existing_cloudfront_key_group_id = var.existing_cloudfront_key_group_id
+  existing_cloudfront_key_group_name = var.existing_cloudfront_key_group_name
 }

@@ -80,3 +80,15 @@ variable "signed_urls_key_group_name" {
   type        = string
   default     = ""
 }
+
+variable "existing_cloudfront_key_group_id" {
+  description = "Use an existing CloudFront key group ID instead of creating a new one. Leave empty to create a new key group when signed URLs are enabled."
+  type        = string
+  default     = ""
+}
+
+variable "existing_cloudfront_key_group_name" {
+  description = "Name of the existing CloudFront key group (for reference; not used for creation)"
+  type        = string
+  default     = ""
+}

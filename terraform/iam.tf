@@ -2,7 +2,7 @@
 
 module "iam_lambda" {
 	source              = "./modules/iam_role"
-	create              = var.enable_lambda && local.bootstrap_iam_role_arn == ""
+	create              = var.enable_lambda
 	name                = "${var.bucket_name}-lambda-role"
 	assume_service      = "lambda.amazonaws.com"
 	managed_policy_arns = ["arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"]

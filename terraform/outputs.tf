@@ -38,12 +38,22 @@ output "lambda_function_url" {
   value       = var.enable_lambda ? module.lambda.function_url : ""
 }
 
+output "lambda_s3_bucket" {
+  description = "S3 bucket containing Lambda packages (if created)"
+  value       = var.enable_lambda ? try(aws_s3_bucket.lambda_packages[0].id, var.lambda_s3_bucket) : ""
+}
+
+output "lambda_s3_key" {
+  description = "S3 key for Lambda zip package"
+  value       = var.enable_lambda ? local.effective_lambda_s3_key : ""
+}
+
 output "secrets_id" {
   description = "Secrets Manager secret id (if created)"
-  value       = try(module.secrets.secret_id, local.bootstrap_secret_id, "")
+  value       = try(module.secrets.secret_id, "")
 }
 
 output "secrets_arn" {
   description = "Secrets Manager secret ARN (if created)"
-  value       = try(module.secrets.secret_arn, local.bootstrap_secret_arn, "")
+  value       = try(module.secrets.secret_arn, "")
 }
