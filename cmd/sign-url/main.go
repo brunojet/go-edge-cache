@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -14,7 +15,20 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	secretaws "github.com/brunojet/go-infra-adapters/v3/pkg/secret/aws"
 )
+
+// SecretPayload matches go-edge-key-management structure
+type SecretPayload struct {
+	PrivatePEM   string `json:"private_pem"`
+	PublicPEM    string `json:"public_pem"`
+	Fingerprint  string `json:"fingerprint"`
+	CreatedAt    string `json:"created_at"`
+	KeyGroupName string `json:"key_group_name"`
+	NamePrefix   string `json:"name_prefix"`
+	PublicKeyID  string `json:"public_key_id"`
+}
 
 // CloudFrontSigner signs CloudFront URLs using Canned Policy (matches AWS CLI)
 type CloudFrontSigner struct {
@@ -22,18 +36,16 @@ type CloudFrontSigner struct {
 	privateKey *rsa.PrivateKey
 }
 
-func NewCloudFrontSigner(keyPairID string, privateKeyPath string) (*CloudFrontSigner, error) {
-	keyData, err := os.ReadFile(privateKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read private key: %w", err)
-	}
-
-	block, _ := pem.Decode(keyData)
+// NewCloudFrontSignerFromPEM creates signer from PEM-encoded private key
+func NewCloudFrontSignerFromPEM(keyPairID string, pemData []byte) (*CloudFrontSigner, error) {
+	block, _ := pem.Decode(pemData)
 	if block == nil {
 		return nil, fmt.Errorf("failed to decode PEM")
 	}
 
 	var privateKey *rsa.PrivateKey
+	var err error
+
 	if block.Type == "RSA PRIVATE KEY" {
 		privateKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
 	} else if block.Type == "PRIVATE KEY" {
@@ -114,10 +126,32 @@ func (s *CloudFrontSigner) buildURL(resourceURL string, expires int64, signature
 	return parsedURL.String(), nil
 }
 
+// FetchSecretPayload retrieves credentials from AWS Secrets Manager
+func FetchSecretPayload(ctx context.Context, secretName string) (*SecretPayload, error) {
+	secretsAPI, err := secretaws.NewSecretAPI(secretaws.WithRegion("us-east-1"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secrets API: %w", err)
+	}
+
+	secretAdapter := secretaws.NewSecrets[SecretPayload](secretsAPI, secretName)
+
+	payload, err := secretAdapter.GetCurrent(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get secret: %w", err)
+	}
+
+	if payload == nil {
+		return nil, fmt.Errorf("secret not found")
+	}
+
+	return payload, nil
+}
+
 func main() {
 	domainName := flag.String("domain", "media.brunojet.com.br", "CloudFront domain name")
 	urlPath := flag.String("path", "", "URL path on CloudFront (e.g., /images/photo.jpg)")
 	expiresIn := flag.Int64("expires", 3600, "Expiration time in seconds from now")
+	secretName := flag.String("secret", "/go-edge-key-management/rotator", "AWS Secrets Manager secret name")
 
 	flag.Parse()
 
@@ -131,12 +165,21 @@ func main() {
 		*urlPath = strings.TrimPrefix(*urlPath, "C:/Program Files/Git")
 	}
 
-	// Note: For this demo, using local private.key file
-	// In production, would fetch from Secrets Manager
-	keyPairID := "K31UKMLKEO2DC4"
-	privateKeyPath := "private.key"
+	// Fetch credentials from AWS Secrets Manager
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	signer, err := NewCloudFrontSigner(keyPairID, privateKeyPath)
+	fmt.Fprintf(os.Stderr, "Fetching credentials from secret: %s\n", *secretName)
+	payload, err := FetchSecretPayload(ctx, *secretName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to fetch secret: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "✓ Secret fetched. Public Key ID: %s\n\n", payload.PublicKeyID)
+
+	// Create signer from secret's private key
+	signer, err := NewCloudFrontSignerFromPEM(payload.PublicKeyID, []byte(payload.PrivatePEM))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create signer: %v\n", err)
 		os.Exit(1)
