@@ -33,8 +33,7 @@ lambda_create_function_url = false
 
 # Lambda environment variables (for configuration)
 lambda_environment = {
-  S3_BUCKET  = "brunojet-media-proxy-dev"
-  AWS_REGION = "us-east-1"
+  S3_BUCKET = "brunojet-media-proxy-dev"
 }
 
 # S3 Cache Settings

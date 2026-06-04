@@ -31,9 +31,11 @@ func init() {
 		log.Printf("S3_BUCKET not set, using default: %s", s3BucketName)
 	}
 
+	// AWS_REGION is set by Lambda runtime, but we default to us-east-1 for local testing
 	awsRegion = os.Getenv("AWS_REGION")
 	if awsRegion == "" {
 		awsRegion = "us-east-1"
+		log.Printf("AWS_REGION not set, using default: %s", awsRegion)
 	}
 
 	log.Printf("Initializing Lambda fallback: bucket=%s region=%s", s3BucketName, awsRegion)
