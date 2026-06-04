@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -16,22 +17,39 @@ import (
 )
 
 var (
-	storageAPI storagecontracts.StorageAPI
-	bucket     storagecontracts.BucketAdapter
+	storageAPI   storagecontracts.StorageAPI
+	bucket       storagecontracts.BucketAdapter
+	s3BucketName string
+	awsRegion    string
 )
 
 func init() {
+	// Load configuration from environment variables
+	s3BucketName = os.Getenv("S3_BUCKET")
+	// Default to dev bucket if not set (for local testing)
+	if s3BucketName == "" {
+		s3BucketName = "brunojet-media-proxy-dev"
+		log.Printf("S3_BUCKET not set, using default: %s", s3BucketName)
+	}
+
+	awsRegion = os.Getenv("AWS_REGION")
+	if awsRegion == "" {
+		awsRegion = "us-east-1"
+	}
+
+	log.Printf("Initializing Lambda handler: bucket=%s region=%s", s3BucketName, awsRegion)
+
 	// Initialize StorageAPI (once on cold start)
 	var err error
 	storageAPI, err = storageadapters.NewStorageAPI(
-		storageadapters.WithRegion("us-east-1"),
+		storageadapters.WithRegion(awsRegion),
 	)
 	if err != nil {
 		log.Fatalf("failed to create storage API: %v", err)
 	}
 
 	// Create adapter for bucket
-	bucket, err = storageAPI.NewBucket("brunojet-media-proxy-dev")
+	bucket, err = storageAPI.NewBucket(s3BucketName)
 	if err != nil {
 		log.Fatalf("failed to create bucket adapter: %v", err)
 	}

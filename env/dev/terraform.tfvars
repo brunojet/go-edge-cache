@@ -20,11 +20,29 @@ tags = {
   Environment = "dev"
 }
 
-# Lambda configuration (optional)
-enable_lambda = false
-# lambda_function_name = ""
-# lambda_image_uri = ""
-# lambda_runtime = "go1.x"
-# lambda_handler = "main"
-# lambda_memory_size = 512
-# lambda_timeout = 30
+# Lambda configuration
+enable_lambda           = true
+lambda_function_name    = "brunojet-media-proxy-dev-origin-lambda"
+lambda_runtime          = "go1.x"
+lambda_handler          = "main"
+lambda_memory_size      = 512
+lambda_timeout          = 30
+lambda_package_type     = "Zip"
+lambda_publish          = false
+lambda_create_function_url = false
+
+# Lambda environment variables
+lambda_environment = {
+  S3_BUCKET   = "brunojet-media-proxy-dev"
+  AWS_REGION  = "us-east-1"
+  # SECRET_ARN and SECRET_NAME can be added if using key-management secrets
+}
+
+# Secrets Manager configuration (for key-management)
+enable_secrets = false
+# secrets_name = "/go-edge-key-management/rotator"
+# secrets_value = ""  # Managed externally by key-management service
+
+# S3 Cache Settings
+s3_cdn_path           = "/cdn"
+s3_cache_cleanup_days = 90

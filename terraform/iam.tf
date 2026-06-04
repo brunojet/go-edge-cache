@@ -12,9 +12,20 @@ module "iam_lambda" {
 			{
 				Effect = "Allow"
 				Action = [
+					"s3:GetObject",
 					"s3:PutObject"
 				]
-				Resource = "${module.media_proxy.bucket_arn}/cdn/*"
+				Resource = [
+					"${module.media_proxy.bucket_arn}/*",
+					"${module.media_proxy.bucket_arn}/cdn/*"
+				]
+			},
+			{
+				Effect = "Allow"
+				Action = [
+					"secretsmanager:GetSecretValue"
+				]
+				Resource = "*"
 			}
 		]
 	}) : ""
