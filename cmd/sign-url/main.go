@@ -54,7 +54,7 @@ func main() {
 
 func run() error {
 	domainName := flag.String("domain", "media.brunojet.com.br", "CloudFront domain name")
-	urlPath := flag.String("path", "", "URL path on CloudFront (e.g., /images/photo.jpg)")
+	urlPath := flag.String("path", "/images/cyril-mzn-WSvth_lwCi0-unsplash.jpg", "URL path on CloudFront (e.g., /images/photo.jpg)")
 	expiresIn := flag.Int64("expires", 3600, "Expiration time in seconds from now")
 	secretName := flag.String("secret", "/go-edge-key-management/rotator", "AWS Secrets Manager secret name")
 
@@ -88,7 +88,7 @@ func run() error {
 	}
 
 	// Build resource URL with /cdn prefix (S3 origin path)
-	resourceURL := fmt.Sprintf("https://%s/cdn%s", *domainName, *urlPath)
+	resourceURL := fmt.Sprintf("https://%s%s", *domainName, *urlPath)
 
 	// Calculate expiration time
 	expiresAt := time.Now().Add(time.Duration(*expiresIn) * time.Second)

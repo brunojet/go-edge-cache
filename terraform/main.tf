@@ -14,10 +14,11 @@ provider "aws" {
 }
 
 # Automatically use Lambda Function URL if available
+# Extract hostname from Function URL (remove https:// prefix and trailing /)
 locals {
   effective_lambda_origin_domain = (
     var.enable_lambda && var.lambda_create_function_url
-    ? module.lambda.function_url
+    ? replace(replace(module.lambda.function_url, "https://", ""), "/", "")
     : var.lambda_origin_domain
   )
 }
