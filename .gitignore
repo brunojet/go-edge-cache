@@ -1,32 +1,83 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# Go binaries
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 
-# Test binary, built with `go test -c`
+# Go test cache
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
-coverage.*
-*.coverprofile
-profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Go build cache
+.cache/
 
-# Go workspace file
+# Dependency directories
+vendor/
+
+# Go workspace
 go.work
 go.work.sum
 
-# env file
-.env
+# Build output
+/build/
+/bin/
+/dist/
+fallback
+infra
+sign-url
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# Coverage
+/coverage/
+*.cover
+*.prof
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+*.tfvars
+*.tfvars.json
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.iml
+.classpath
+.project
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Credentials & Keys
+terraform/keys/
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+!*.pem.example
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Local development
+.claude/
+.claude.*
+.claude.local/
