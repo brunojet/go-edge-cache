@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -38,14 +40,42 @@ var (
 	awsRegion        string
 	cloudFrontDomain string
 	secretName       string
+	statusCodeRegex  = regexp.MustCompile(`StatusCode:\s*(\d+)`)
 )
+
+// BucketError contains parsed S3 error information
+type BucketError struct {
+	StatusCode int
+	Error      error
+}
+
+// extractS3StatusCode parses S3 error message and extracts status code
+func extractS3StatusCode(err error) *BucketError {
+	if err == nil {
+		return nil
+	}
+
+	// Default to 500 if unable to extract status code
+	statusCode := http.StatusInternalServerError
+
+	// Try to parse StatusCode from error message
+	matches := statusCodeRegex.FindStringSubmatch(err.Error())
+	if len(matches) > 1 {
+		if code, parseErr := strconv.Atoi(matches[1]); parseErr == nil {
+			statusCode = code
+		}
+	}
+
+	return &BucketError{
+		StatusCode: statusCode,
+		Error:      err,
+	}
+}
 
 func getEnvOrDefault(key, defaultVal string) string {
 	if val := os.Getenv(key); val != "" {
-		log.Printf("  OK: %s from environment", key) //nolint:gosec // Variable names only, not values
 		return val
 	}
-	log.Printf("  WARN: %s env not set, using default", key) //nolint:gosec // Variable names only, not values
 	return defaultVal
 }
 
@@ -68,162 +98,96 @@ func getEnvOrDefaultInt64(key string, defaultVal int64) int64 {
 }
 
 func init() {
-	log.Printf("=== Lambda Cold Start Initialization ===")
 	tmConcurrency := getEnvOrDefaultInt("TM_CONCURRENCY", defaultTMConcurrency)
 	tmPartSize := getEnvOrDefaultInt64("TM_PART_SIZE", defaultTMPartSize)
 	tmThreshold := getEnvOrDefaultInt64("TM_THRESHOLD", defaultTMThreshold)
-	log.Printf("  Transfer Manager tuning: concurrency=%d, partSize=%dB, threshold=%dB",
-		tmConcurrency, tmPartSize, tmThreshold)
+
 	storageAPI, err := storageadapters.NewStorageAPI(
 		storageadapters.WithTransferManagerConcurrency(tmConcurrency),
 		storageadapters.WithTransferManagerPartSize(tmPartSize),
 		storageadapters.WithTransferManagerThreshold(tmThreshold),
 	)
 	if err != nil {
-		log.Fatalf("FATAL: failed to create storage API: %v", err)
+		log.Fatalf("failed to initialize storage API: %v", err)
 	}
-	log.Printf("  ✓ StorageAPI created with transfer manager tuning")
+
 	s3BucketName = getEnvOrDefault("S3_BUCKET", defaultS3Bucket)
-	log.Printf("  Creating BucketAdapter for bucket=%s", s3BucketName)
 	bucket, err = storageAPI.NewBucket(s3BucketName)
 	if err != nil {
-		log.Fatalf("FATAL: failed to create bucket adapter: %v", err)
+		log.Fatalf("failed to create bucket adapter: %v", err)
 	}
+
 	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", defaultCloudFrontDomain)
 	secretName = getEnvOrDefault("SECRET_NAME", defaultSecretName) //nolint:gosec // Path to external secret, not a credential
-	log.Printf("=== Initialization Complete ===")
 }
 
 // Handle is the Lambda handler entry point.
 // 100% STREAMING: Download → Upload (NO buffering in between)
 func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
 	path := req.RawPath
-	log.Printf("Handling request for path: '%s'", path)
-
-	// 0. Acquire distributed lock (prevent concurrent updates)
-	// Note: adapter automatically appends .lock suffix, don't add it here
+	// Acquire distributed lock (prevent concurrent updates)
 	lockKey := fmt.Sprintf("cdn%s", path)
 	lockErr := bucket.GetLockWait(ctx, lockKey, defaultLockTTL*time.Second, defaultLockWaitTimeout*time.Second)
 	if lockErr != nil {
-		log.Printf("LOCK: Failed to acquire lock for %s - %v", path, lockErr)
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 429,
-			Headers: map[string]string{
-				"Content-Type": "text/plain",
-				"Retry-After":  "10",
-			},
-			Body:            "Cache update in progress",
-			IsBase64Encoded: false,
-		}, nil
+		message := fmt.Sprintf("lock acquire failed for %s: %v", path, lockErr)
+		return errorResponse(http.StatusTooManyRequests, message), nil
 	}
 	defer func() {
 		if releaseErr := bucket.ReleaseLock(ctx, lockKey); releaseErr != nil {
-			log.Printf("WARN: failed to release lock for %s - %v", path, releaseErr)
+			log.Printf("lock release failed for %s: %v", path, releaseErr)
 		}
 	}()
-	log.Printf("LOCK: Acquired lock for %s (%ds TTL)", path, defaultLockTTL)
-
-	// 1. Check if already cached in /cdn
+	// Check if already cached in /cdn
 	cachedContentType, cacheExists := isCached(ctx, path)
 	if cacheExists {
-		log.Printf("CACHE HIT: File already cached for %s", path)
-		return handleCachedFile(ctx, path, cachedContentType)
+		return handleResponse(ctx, "cached", path, cachedContentType)
 	}
-
-	// 2. Not cached - Fetch from S3 origin (root path - no /cdn prefix)
-	log.Printf("Step 1: Fetching from S3 origin")
-	originBody, contentType, err := fetchFromS3Origin(ctx, path)
-	if err != nil {
-		log.Printf("ERROR Step 1: origin fetch failed - %v", err)
-		return errorResponse(404, "Not Found"), nil
+	// Fetch from S3 origin (root path - no /cdn prefix)
+	originBody, contentType, bucketErr := fetchFromS3Origin(ctx, path)
+	if bucketErr != nil {
+		return errorResponse(bucketErr.StatusCode, bucketErr.Error.Error()), nil
 	}
 	defer func() {
 		if err := originBody.Close(); err != nil {
-			log.Printf("WARN: failed to close origin body: %v", err)
+			log.Printf("failed to close origin body: %v", err)
 		}
 	}()
-
-	log.Printf("Step 1 OK: Fetched from S3 origin - ContentType=%s", contentType)
-
-	// 2. Upload DIRECTLY to S3 /cdn (100% STREAMING - NO BUFFERING!)
+	// Upload to S3 /cdn (100% STREAMING - NO BUFFERING!)
 	s3Key := "cdn" + path
-	log.Printf("Step 2: Uploading to S3 cache (STREAMING) - %s", s3Key)
-
-	err = uploadWithManager(ctx, s3Key, contentType, originBody)
-	if err != nil {
-		log.Printf("ERROR Step 2: Upload failed - %v", err)
-		return errorResponse(502, "Upload failed"), nil
+	bucketErr = uploadWithManager(ctx, s3Key, contentType, originBody)
+	if bucketErr != nil {
+		return errorResponse(bucketErr.StatusCode, bucketErr.Error.Error()), nil
 	}
-
-	// 3. Sign redirect URL and return 302
-	log.Printf("Step 3: Signing redirect URL")
-
-	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
-	if err != nil {
-		log.Printf("WARN: failed to sign URL: %v (returning 200 without cache)", err)
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 200,
-			Headers: map[string]string{
-				"Content-Type": contentType,
-			},
-			Body:            "OK (unsigned)",
-			IsBase64Encoded: false,
-		}, nil
-	}
-
-	log.Printf("SUCCESS: Upload complete - returning signed redirect (302)")
-
-	return &events.LambdaFunctionURLResponse{
-		StatusCode: 302,
-		Headers: map[string]string{
-			"Location": signedURL,
-		},
-		Body:            "",
-		IsBase64Encoded: false,
-	}, nil
+	return handleResponse(ctx, "retrieved", path, contentType)
 }
 
 // fetchFromS3Origin fetches object from S3 root using BucketAdapter
 // Uses transfer manager internally for automatic retry and streaming
-func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string, error) {
+func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string, *BucketError) {
 	// Remove leading slash for S3 key
 	s3Key := path
 	if s3Key != "" && s3Key[0] == '/' {
 		s3Key = s3Key[1:]
 	}
-
 	if s3Key == "" {
-		return nil, "", fmt.Errorf("empty path")
+		return nil, "", extractS3StatusCode(fmt.Errorf("empty path"))
 	}
-
-	log.Printf("  DEBUG: GetObject from S3 - key=%s", s3Key)
-
 	// Use BucketAdapter.GetObject (abstracts transfer manager with retry)
 	obj := &storagecontracts.BucketObject{}
 	err := bucket.GetObject(ctx, s3Key, obj)
 	if err != nil {
-		log.Printf("  ERROR: GetObject failed - %v", err)
-		return nil, "", fmt.Errorf("getobject failed: %w", err)
+		return nil, "", extractS3StatusCode(err)
 	}
-
 	contentType := obj.Info.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-
-	log.Printf("  DEBUG: GetObject success - ContentType=%s, Size=%d", contentType, obj.Info.Size)
-
-	// Return streaming body (transfer manager handles retry internally)
 	return obj.Body, contentType, nil
 }
 
 // uploadWithManager uses BucketAdapter for streaming upload with auto-retry
 // Body is streamed directly (100% streaming - NO buffering!)
-func uploadWithManager(ctx context.Context, key, contentType string, body io.Reader) error {
-	log.Printf("  DEBUG: UploadObject - key=%s, contentType=%s", key, contentType)
-
-	// Use BucketAdapter.PutObject (abstracts transfer manager with retry)
-	// Transfer manager handles multipart + retry automatically
+func uploadWithManager(ctx context.Context, key, contentType string, body io.Reader) *BucketError {
 	obj := &storagecontracts.BucketObject{
 		Info: storagecontracts.ObjectInfo{
 			Key:         key,
@@ -231,14 +195,10 @@ func uploadWithManager(ctx context.Context, key, contentType string, body io.Rea
 		},
 		Body: io.NopCloser(body), // ← STREAMING directly to adapter!
 	}
-
 	err := bucket.PutObject(ctx, obj)
 	if err != nil {
-		log.Printf("  ERROR: Upload failed - %v", err)
-		return fmt.Errorf("upload failed: %w", err)
+		return extractS3StatusCode(err)
 	}
-
-	log.Printf("  DEBUG: Upload success - key=%s", key)
 	return nil
 }
 
@@ -248,50 +208,49 @@ func isCached(ctx context.Context, path string) (string, bool) {
 	objInfo := &storagecontracts.ObjectInfo{}
 	err := bucket.HeadObject(ctx, s3Key, objInfo)
 	if err != nil {
-		log.Printf("  Cache check: %s not found", s3Key)
 		return "", false
 	}
-	log.Printf("  Cache check: %s exists (size=%d bytes)", s3Key, objInfo.Size)
 	return objInfo.ContentType, true
 }
 
-// handleCachedFile signs and returns cached file via 302 redirect
-func handleCachedFile(ctx context.Context, path, contentType string) (*events.LambdaFunctionURLResponse, error) {
-	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
+func handleResponse(ctx context.Context, mode, path, contentType string) (*events.LambdaFunctionURLResponse, error) {
+	signedURL, err := cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, urlSignatureTTL)
 	if err != nil {
-		log.Printf("WARN: failed to sign URL for cached file: %v", err)
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 200,
-			Headers: map[string]string{
-				"Content-Type": contentType,
-			},
-			Body:            "OK (unsigned)",
-			IsBase64Encoded: false,
-		}, nil
+		message := fmt.Sprintf("URL signing failed for %s file %s: %v", mode, path, err)
+		return errorResponseInternal(http.StatusInternalServerError, message, true), nil
 	}
-	log.Printf("SUCCESS: Serving cached file via signed redirect (302)")
+	log.Printf("signed redirect (%s): %s", mode, signedURL)
+	return redirectResponse(signedURL), nil
+}
+
+func redirectResponse(signedURL string) *events.LambdaFunctionURLResponse {
 	return &events.LambdaFunctionURLResponse{
 		StatusCode: 302,
 		Headers: map[string]string{
-			"Location": signedURL,
+			"Location":      signedURL,
+			"Cache-Control": "no-cache, no-store, must-revalidate",
 		},
 		Body:            "",
 		IsBase64Encoded: false,
-	}, nil
+	}
 }
 
-// signRedirectURL signs a CloudFront URL using shared cdn package
-func signRedirectURL(ctx context.Context, path string, expiresIn int64) (string, error) {
-	return cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, expiresIn)
+func errorResponseInternal(statusCode int, message string, ignoreCache bool) *events.LambdaFunctionURLResponse {
+	log.Printf("ERROR: %s", message)
+	headers := map[string]string{"Content-Type": "text/plain"}
+	if ignoreCache {
+		headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+	}
+	return &events.LambdaFunctionURLResponse{
+		StatusCode:      statusCode,
+		Headers:         headers,
+		Body:            message,
+		IsBase64Encoded: false,
+	}
 }
 
 func errorResponse(statusCode int, body string) *events.LambdaFunctionURLResponse {
-	return &events.LambdaFunctionURLResponse{
-		StatusCode:      statusCode,
-		Headers:         map[string]string{"Content-Type": "text/plain"},
-		Body:            body,
-		IsBase64Encoded: false,
-	}
+	return errorResponseInternal(statusCode, body, false)
 }
 
 func main() {

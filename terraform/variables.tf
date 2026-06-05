@@ -34,6 +34,18 @@ variable "s3_cache_cleanup_days" {
   default     = 90
 }
 
+variable "enable_origin_shield" {
+  description = "Enable CloudFront Origin Shield for additional caching layer"
+  type        = bool
+  default     = false
+}
+
+variable "origin_shield_region" {
+  description = "AWS region for Origin Shield endpoint"
+  type        = string
+  default     = "us-east-1"
+}
+
 variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)
