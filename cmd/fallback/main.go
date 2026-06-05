@@ -97,7 +97,7 @@ func init() {
 	if err != nil {
 		log.Fatalf("FATAL: failed to create bucket adapter: %v", err)
 	}
-	log.Printf("  ✓ BucketAdapter created (transfer manager with 100% streaming)")
+	log.Printf("  ✓ BucketAdapter created (transfer manager with 100%% streaming)")
 
 	// Initialize CloudFront signing for redirect URLs
 	cloudFrontDomain = os.Getenv("CLOUDFRONT_DOMAIN")
