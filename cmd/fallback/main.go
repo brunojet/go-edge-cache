@@ -101,7 +101,8 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	log.Printf("Handling request for path: '%s'", path)
 
 	// 0. Acquire distributed lock (prevent concurrent updates)
-	lockKey := fmt.Sprintf("cdn%s.lock", path)
+	// Note: adapter automatically appends .lock suffix, don't add it here
+	lockKey := fmt.Sprintf("cdn%s", path)
 	lockErr := bucket.GetLockWait(ctx, lockKey, defaultLockTTL*time.Second, defaultLockWaitTimeout*time.Second)
 	if lockErr != nil {
 		log.Printf("LOCK: Failed to acquire lock for %s - %v", path, lockErr)
@@ -122,7 +123,14 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	}()
 	log.Printf("LOCK: Acquired lock for %s (%ds TTL)", path, defaultLockTTL)
 
-	// 1. Fetch from S3 origin (root path - no /cdn prefix)
+	// 1. Check if already cached in /cdn
+	cachedContentType, cacheExists := isCached(ctx, path)
+	if cacheExists {
+		log.Printf("CACHE HIT: File already cached for %s", path)
+		return handleCachedFile(ctx, path, cachedContentType)
+	}
+
+	// 2. Not cached - Fetch from S3 origin (root path - no /cdn prefix)
 	log.Printf("Step 1: Fetching from S3 origin")
 	originBody, contentType, err := fetchFromS3Origin(ctx, path)
 	if err != nil {
@@ -232,6 +240,44 @@ func uploadWithManager(ctx context.Context, key, contentType string, body io.Rea
 
 	log.Printf("  DEBUG: Upload success - key=%s", key)
 	return nil
+}
+
+// isCached checks if file already exists in /cdn cache via HeadObject
+func isCached(ctx context.Context, path string) (string, bool) {
+	s3Key := "cdn" + path
+	objInfo := &storagecontracts.ObjectInfo{}
+	err := bucket.HeadObject(ctx, s3Key, objInfo)
+	if err != nil {
+		log.Printf("  Cache check: %s not found", s3Key)
+		return "", false
+	}
+	log.Printf("  Cache check: %s exists (size=%d bytes)", s3Key, objInfo.Size)
+	return objInfo.ContentType, true
+}
+
+// handleCachedFile signs and returns cached file via 302 redirect
+func handleCachedFile(ctx context.Context, path, contentType string) (*events.LambdaFunctionURLResponse, error) {
+	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
+	if err != nil {
+		log.Printf("WARN: failed to sign URL for cached file: %v", err)
+		return &events.LambdaFunctionURLResponse{
+			StatusCode: 200,
+			Headers: map[string]string{
+				"Content-Type": contentType,
+			},
+			Body:            "OK (unsigned)",
+			IsBase64Encoded: false,
+		}, nil
+	}
+	log.Printf("SUCCESS: Serving cached file via signed redirect (302)")
+	return &events.LambdaFunctionURLResponse{
+		StatusCode: 302,
+		Headers: map[string]string{
+			"Location": signedURL,
+		},
+		Body:            "",
+		IsBase64Encoded: false,
+	}, nil
 }
 
 // signRedirectURL signs a CloudFront URL using shared cdn package

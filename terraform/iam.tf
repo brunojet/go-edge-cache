@@ -26,10 +26,13 @@ module "iam_lambda" {
 				Resource = "${module.media_proxy.bucket_arn}/*"
 			},
 			{
-				# Write to /cdn prefix only (cache)
+				# Read/write/delete in /cdn prefix (cache, lock operations, cache check)
 				Effect = "Allow"
 				Action = [
-					"s3:PutObject"
+					"s3:GetObject",
+					"s3:HeadObject",
+					"s3:PutObject",
+					"s3:DeleteObject"
 				]
 				Resource = "${module.media_proxy.bucket_arn}/cdn/*"
 			},
