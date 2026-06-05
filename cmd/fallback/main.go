@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -53,13 +54,42 @@ func init() {
 	// Initialize StorageAPI (once on cold start)
 	var err error
 	log.Printf("  Creating StorageAPI with region=%s", awsRegion)
+
+	// Parse transfer manager tuning from environment
+	tmConcurrency := 1
+	if c := os.Getenv("TM_CONCURRENCY"); c != "" {
+		if parsed, err := strconv.Atoi(c); err == nil && parsed > 0 {
+			tmConcurrency = parsed
+		}
+	}
+
+	tmPartSize := int64(52428800) // 50MB default
+	if p := os.Getenv("TM_PART_SIZE"); p != "" {
+		if parsed, err := strconv.ParseInt(p, 10, 64); err == nil && parsed > 0 {
+			tmPartSize = parsed
+		}
+	}
+
+	tmThreshold := int64(104857600) // 100MB default
+	if t := os.Getenv("TM_THRESHOLD"); t != "" {
+		if parsed, err := strconv.ParseInt(t, 10, 64); err == nil && parsed > 0 {
+			tmThreshold = parsed
+		}
+	}
+
+	log.Printf("  Transfer Manager tuning: concurrency=%d, partSize=%dB, threshold=%dB",
+		tmConcurrency, tmPartSize, tmThreshold)
+
 	storageAPI, err = storageadapters.NewStorageAPI(
 		storageadapters.WithRegion(awsRegion),
+		storageadapters.WithTransferManagerConcurrency(tmConcurrency),
+		storageadapters.WithTransferManagerPartSize(tmPartSize),
+		storageadapters.WithTransferManagerThreshold(tmThreshold),
 	)
 	if err != nil {
 		log.Fatalf("FATAL: failed to create storage API: %v", err)
 	}
-	log.Printf("  ✓ StorageAPI created")
+	log.Printf("  ✓ StorageAPI created with transfer manager tuning")
 
 	// Create adapter for bucket
 	log.Printf("  Creating BucketAdapter for bucket=%s", s3BucketName)
