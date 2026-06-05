@@ -193,8 +193,3 @@ variable "secrets_value" {
   default     = ""
 }
 
-variable "existing_cloudfront_key_group_name" {
-  description = "Name of the existing CloudFront key group (for reference; not used for creation)"
-  type        = string
-  default     = ""
-}

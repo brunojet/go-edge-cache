@@ -20,7 +20,6 @@ module "media_proxy" {
   source = "./modules/media_proxy"
 
   bucket_name                 = var.bucket_name
-  # Extract hostname from Lambda Function URL (remove https:// and trailing slash)
   lambda_origin_domain        = var.enable_lambda ? replace(replace(module.lambda.function_url, "https://", ""), "/", "") : var.lambda_origin_domain
   cloudfront_price_class      = var.cloudfront_price_class
   s3_cdn_path                 = var.s3_cdn_path
@@ -33,5 +32,4 @@ module "media_proxy" {
   signed_urls_public_key_name = var.signed_urls_public_key_name
   signed_urls_key_group_name  = var.signed_urls_key_group_name
   existing_cloudfront_key_group_id = var.existing_cloudfront_key_group_id
-  existing_cloudfront_key_group_name = var.existing_cloudfront_key_group_name
 }
