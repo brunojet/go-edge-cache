@@ -92,3 +92,15 @@ variable "existing_cloudfront_key_group_name" {
   type        = string
   default     = ""
 }
+
+variable "enable_origin_shield" {
+  description = "Enable CloudFront Origin Shield for additional caching layer (default false)"
+  type        = bool
+  default     = false
+}
+
+variable "origin_shield_region" {
+  description = "AWS region for Origin Shield endpoint (e.g. us-east-1)"
+  type        = string
+  default     = "us-east-1"
+}

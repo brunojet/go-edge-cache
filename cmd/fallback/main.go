@@ -8,19 +8,24 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 
-	cdnadapter "github.com/brunojet/go-infra-adapters/v4/pkg/cdn"
-	secretaws "github.com/brunojet/go-infra-adapters/v4/pkg/secret/aws"
+	"github.com/brunojet/go-edge-cache/internal/cdn"
 	storageadapters "github.com/brunojet/go-infra-adapters/v4/pkg/storage/aws/s3"
 	storagecontracts "github.com/brunojet/go-infra-adapters/v4/pkg/storage/contracts"
 )
 
 const (
-	urlSignatureTTL int64 = 3600 // 1 hour
+	defaultS3Bucket         = "brunojet-media-proxy-dev"
+	defaultAWSRegion        = "us-east-1"
+	defaultCloudFrontDomain = "media.brunojet.com.br"
+	defaultSecretName       = "/go-edge-key-management/rotator" //nolint:gosec // Path to AWS Secrets Manager, not a credential
+	defaultTMConcurrency    = 1
+	defaultTMPartSize       = 52428800  // 50MB
+	defaultTMThreshold      = 104857600 // 100MB
+	urlSignatureTTL         = 3600      // 1 hour
 )
 
 var (
@@ -32,54 +37,48 @@ var (
 	secretName       string
 )
 
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		log.Printf("  OK: %s from environment", key) //nolint:gosec // Variable names only, not values
+		return val
+	}
+	log.Printf("  WARN: %s env not set, using default", key) //nolint:gosec // Variable names only, not values
+	return defaultVal
+}
+
+func getEnvOrDefaultInt(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultVal
+}
+
+func getEnvOrDefaultInt64(key string, defaultVal int64) int64 {
+	if val := os.Getenv(key); val != "" {
+		if parsed, err := strconv.ParseInt(val, 10, 64); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultVal
+}
+
 func init() {
 	log.Printf("=== Lambda Cold Start Initialization ===")
 
-	// Load S3 configuration from environment
-	s3BucketName = os.Getenv("S3_BUCKET")
-	if s3BucketName == "" {
-		s3BucketName = "brunojet-media-proxy-dev"
-		log.Printf("  WARN: S3_BUCKET env not set, using default: %s", s3BucketName)
-	} else {
-		log.Printf("  OK: S3_BUCKET from environment: %s", s3BucketName)
-	}
-
-	awsRegion = os.Getenv("AWS_REGION")
-	if awsRegion == "" {
-		awsRegion = "us-east-1"
-		log.Printf("  WARN: AWS_REGION env not set, using default: %s", awsRegion)
-	} else {
-		log.Printf("  OK: AWS_REGION from environment: %s", awsRegion)
-	}
+	s3BucketName = getEnvOrDefault("S3_BUCKET", defaultS3Bucket)
+	awsRegion = getEnvOrDefault("AWS_REGION", defaultAWSRegion)
 
 	log.Printf("Initializing Lambda fallback handler")
 	log.Printf("  Configuration: bucket=%s, region=%s", s3BucketName, awsRegion)
 
-	// Initialize StorageAPI (once on cold start)
 	var err error
 	log.Printf("  Creating StorageAPI with region=%s", awsRegion)
 
-	// Parse transfer manager tuning from environment
-	tmConcurrency := 1
-	if c := os.Getenv("TM_CONCURRENCY"); c != "" {
-		if parsed, err := strconv.Atoi(c); err == nil && parsed > 0 {
-			tmConcurrency = parsed
-		}
-	}
-
-	tmPartSize := int64(52428800) // 50MB default
-	if p := os.Getenv("TM_PART_SIZE"); p != "" {
-		if parsed, err := strconv.ParseInt(p, 10, 64); err == nil && parsed > 0 {
-			tmPartSize = parsed
-		}
-	}
-
-	tmThreshold := int64(104857600) // 100MB default
-	if t := os.Getenv("TM_THRESHOLD"); t != "" {
-		if parsed, err := strconv.ParseInt(t, 10, 64); err == nil && parsed > 0 {
-			tmThreshold = parsed
-		}
-	}
+	tmConcurrency := getEnvOrDefaultInt("TM_CONCURRENCY", defaultTMConcurrency)
+	tmPartSize := getEnvOrDefaultInt64("TM_PART_SIZE", defaultTMPartSize)
+	tmThreshold := getEnvOrDefaultInt64("TM_THRESHOLD", defaultTMThreshold)
 
 	log.Printf("  Transfer Manager tuning: concurrency=%d, partSize=%dB, threshold=%dB",
 		tmConcurrency, tmPartSize, tmThreshold)
@@ -95,7 +94,6 @@ func init() {
 	}
 	log.Printf("  ✓ StorageAPI created with transfer manager tuning")
 
-	// Create adapter for bucket
 	log.Printf("  Creating BucketAdapter for bucket=%s", s3BucketName)
 	bucket, err = storageAPI.NewBucket(s3BucketName)
 	if err != nil {
@@ -103,22 +101,8 @@ func init() {
 	}
 	log.Printf("  ✓ BucketAdapter created (transfer manager with 100%% streaming)")
 
-	// Initialize CloudFront signing for redirect URLs
-	cloudFrontDomain = os.Getenv("CLOUDFRONT_DOMAIN")
-	if cloudFrontDomain == "" {
-		cloudFrontDomain = "media.brunojet.com.br"
-		log.Printf("  WARN: CLOUDFRONT_DOMAIN env not set, using default: %s", cloudFrontDomain)
-	} else {
-		log.Printf("  OK: CLOUDFRONT_DOMAIN from environment: %s", cloudFrontDomain)
-	}
-
-	secretName = os.Getenv("SECRET_NAME")
-	if secretName == "" {
-		secretName = "/go-edge-key-management/rotator" //nolint:gosec // This is an AWS Secrets Manager path, not a credential
-		log.Printf("  WARN: SECRET_NAME env not set, using default: %s", secretName)
-	} else {
-		log.Printf("  OK: SECRET_NAME from environment: %s", secretName)
-	}
+	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", defaultCloudFrontDomain)
+	secretName = getEnvOrDefault("SECRET_NAME", defaultSecretName) //nolint:gosec // Path to external secret, not a credential
 	log.Printf("  ✓ CloudFront signing configured")
 
 	log.Printf("=== Initialization Complete ===")
@@ -127,67 +111,13 @@ func init() {
 // Handle is the Lambda handler entry point.
 // 100% STREAMING: Download → Upload (NO buffering in between)
 func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
+	// Log event for debugging
+	log.Printf("DEBUG: Event received - RawPath='%s'", req.RawPath)
+
 	path := req.RawPath
-	log.Printf("DEBUG: Event received - RawPath='%s'", path)
 	log.Printf("Handling fallback request for path: '%s'", path)
 
-	// 0. Acquire distributed lock (prevent concurrent updates)
-	lockKey := fmt.Sprintf("cdn%s.lock", path)
-	if lockErr := bucket.GetLockWait(ctx, lockKey, 30*time.Second, 30*time.Second); lockErr != nil {
-		log.Printf("LOCK: Failed to acquire lock for %s - %v", path, lockErr)
-		return errorResponse(429, "Cache update in progress"), nil
-	}
-	// Lock acquired successfully
-	defer func() {
-		if releaseErr := bucket.ReleaseLock(ctx, lockKey); releaseErr != nil {
-			log.Printf("WARN: failed to release lock for %s - %v", path, releaseErr)
-		}
-	}()
-	log.Printf("LOCK: Acquired lock for %s (30s TTL)", path)
-
-	// 1. Check if already cached in /cdn
-	cachedContentType, cacheExists := isCached(ctx, path)
-	if cacheExists {
-		log.Printf("CACHE HIT: File already cached in /cdn for %s", path)
-		return handleCachedFile(ctx, path, cachedContentType)
-	}
-
-	// 2. Not cached - fetch from origin and upload to /cdn
-	log.Printf("CACHE MISS: Fetching from origin and uploading to /cdn")
-	return handleCacheMiss(ctx, path)
-}
-
-// isCached checks if file already exists in /cdn cache
-func isCached(ctx context.Context, path string) (string, bool) {
-	s3Key := "cdn" + path
-	objInfo := &storagecontracts.ObjectInfo{}
-	err := bucket.HeadObject(ctx, s3Key, objInfo)
-	if err != nil {
-		log.Printf("  Cache check failed for %s - %v", s3Key, err)
-		return "", false
-	}
-	log.Printf("  Cache check OK: %s exists (size=%d)", s3Key, objInfo.Size)
-	return objInfo.ContentType, true
-}
-
-// handleCachedFile signs and returns cached file
-func handleCachedFile(ctx context.Context, path, contentType string) (*events.LambdaFunctionURLResponse, error) {
-	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
-	if err != nil {
-		log.Printf("WARN: failed to sign URL for cached file: %v", err)
-		return errorResponse(200, "OK (unsigned)"), nil
-	}
-	log.Printf("SUCCESS: Serving cached file - signed URL generated")
-	return &events.LambdaFunctionURLResponse{
-		StatusCode: 302,
-		Headers:    map[string]string{"Location": signedURL},
-		Body:       "",
-	}, nil
-}
-
-// handleCacheMiss fetches from origin, uploads to cache, and signs
-func handleCacheMiss(ctx context.Context, path string) (*events.LambdaFunctionURLResponse, error) {
-	// Step 1: Fetch from S3 origin
+	// 1. Fetch from S3 origin (root path - no /cdn prefix)
 	log.Printf("Step 1: Fetching from S3 origin")
 	originBody, contentType, err := fetchFromS3Origin(ctx, path)
 	if err != nil {
@@ -199,45 +129,46 @@ func handleCacheMiss(ctx context.Context, path string) (*events.LambdaFunctionUR
 			log.Printf("WARN: failed to close origin body: %v", err)
 		}
 	}()
+
 	log.Printf("Step 1 OK: Fetched from S3 origin - ContentType=%s", contentType)
 
-	// Step 2: Upload to /cdn (100% STREAMING - NO BUFFERING!)
+	// 2. Upload DIRECTLY to S3 /cdn (100% STREAMING - NO BUFFERING!)
 	s3Key := "cdn" + path
 	log.Printf("Step 2: Uploading to S3 cache (STREAMING) - %s", s3Key)
-	if err := uploadWithManager(ctx, s3Key, contentType, originBody); err != nil {
+
+	err = uploadWithManager(ctx, s3Key, contentType, originBody)
+	if err != nil {
 		log.Printf("ERROR Step 2: Upload failed - %v", err)
 		return errorResponse(502, "Upload failed"), nil
 	}
-	log.Printf("Step 2 OK: Uploaded to cache")
 
-	// Step 3: Sign redirect URL
+	// 3. Sign redirect URL and return 302
 	log.Printf("Step 3: Signing redirect URL")
+
 	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
 	if err != nil {
-		log.Printf("WARN: failed to sign URL: %v", err)
-		return errorResponse(200, "OK (unsigned)"), nil
+		log.Printf("WARN: failed to sign URL: %v (returning 200 without cache)", err)
+		return &events.LambdaFunctionURLResponse{
+			StatusCode: 200,
+			Headers: map[string]string{
+				"Content-Type": contentType,
+			},
+			Body:            "OK (unsigned)",
+			IsBase64Encoded: false,
+		}, nil
 	}
+
 	log.Printf("SUCCESS: 100%% streaming upload complete - redirect to signed URL")
+	log.Printf("  Signed URL: %s", signedURL)
+
 	return &events.LambdaFunctionURLResponse{
 		StatusCode: 302,
-		Headers:    map[string]string{"Location": signedURL},
-		Body:       "",
-	}, nil
-}
-
-// errorResponse builds error response with appropriate headers
-func errorResponse(statusCode int, body string) *events.LambdaFunctionURLResponse {
-	resp := &events.LambdaFunctionURLResponse{
-		StatusCode:      statusCode,
-		Headers:         map[string]string{"Content-Type": "text/plain"},
-		Body:            body,
+		Headers: map[string]string{
+			"Location": signedURL,
+		},
+		Body:            "",
 		IsBase64Encoded: false,
-	}
-	// Add Retry-After for 429 (Too Many Requests)
-	if statusCode == 429 {
-		resp.Headers["Retry-After"] = "10"
-	}
-	return resp
+	}, nil
 }
 
 // fetchFromS3Origin fetches object from S3 root using BucketAdapter
@@ -299,47 +230,18 @@ func uploadWithManager(ctx context.Context, key, contentType string, body io.Rea
 	return nil
 }
 
-// SecretPayload matches go-edge-key-management structure
-type SecretPayload struct {
-	PrivatePEM  string `json:"private_pem"`
-	Fingerprint string `json:"fingerprint"`
-	PublicKeyID string `json:"public_key_id"`
+// signRedirectURL signs a CloudFront URL using shared cdn package
+func signRedirectURL(ctx context.Context, path string, expiresIn int64) (string, error) {
+	return cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, expiresIn)
 }
 
-// signRedirectURL signs a CloudFront URL and returns the full signed URL
-func signRedirectURL(ctx context.Context, path string, expiresIn int64) (string, error) {
-	// Fetch signer from AWS Secrets Manager
-	secretsAPI, err := secretaws.NewSecretAPI(secretaws.WithRegion(awsRegion))
-	if err != nil {
-		return "", fmt.Errorf("failed to create secrets API: %w", err)
+func errorResponse(statusCode int, body string) *events.LambdaFunctionURLResponse {
+	return &events.LambdaFunctionURLResponse{
+		StatusCode:      statusCode,
+		Headers:         map[string]string{"Content-Type": "text/plain"},
+		Body:            body,
+		IsBase64Encoded: false,
 	}
-
-	secretAdapter := secretaws.NewSecrets[SecretPayload](secretsAPI, secretName)
-	payload, err := secretAdapter.GetCurrent(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch secret: %w", err)
-	}
-
-	if payload == nil {
-		return "", fmt.Errorf("secret not found")
-	}
-
-	// Create signer from secret
-	signer, err := cdnadapter.NewCloudFrontSignerFromPEM(payload.PublicKeyID, []byte(payload.PrivatePEM))
-	if err != nil {
-		return "", fmt.Errorf("failed to create signer: %w", err)
-	}
-
-	// Sign the URL
-	resourceURL := fmt.Sprintf("https://%s%s", cloudFrontDomain, path)
-	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
-
-	signedURL, err := signer.SignURL(ctx, resourceURL, expiresAt.Unix())
-	if err != nil {
-		return "", fmt.Errorf("failed to sign URL: %w", err)
-	}
-
-	return signedURL, nil
 }
 
 func main() {

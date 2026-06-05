@@ -16,21 +16,11 @@ provider "aws" {
 # Get current AWS account ID for ARN construction
 data "aws_caller_identity" "current" {}
 
-# Automatically use Lambda Function URL if available
-# Extract hostname from Function URL (remove https:// prefix and trailing /)
-locals {
-  effective_lambda_origin_domain = (
-    var.enable_lambda && var.lambda_create_function_url
-    ? replace(replace(module.lambda.function_url, "https://", ""), "/", "")
-    : var.lambda_origin_domain
-  )
-}
-
 module "media_proxy" {
   source = "./modules/media_proxy"
 
   bucket_name                 = var.bucket_name
-  lambda_origin_domain        = local.effective_lambda_origin_domain
+  lambda_origin_domain        = var.lambda_origin_domain
   cloudfront_price_class      = var.cloudfront_price_class
   s3_cdn_path                 = var.s3_cdn_path
   s3_cache_cleanup_days       = var.s3_cache_cleanup_days

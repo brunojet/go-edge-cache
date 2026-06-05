@@ -71,6 +71,36 @@ resource "aws_cloudfront_origin_access_control" "oac" {
   signing_protocol                  = "sigv4"
 }
 
+# Custom cache policy for media with error caching control
+# Status code-based TTLs (302 no-cache, 4xx 60s, 5xx 30s) are managed via:
+# 1. Lambda returns no Cache-Control headers (CloudFront handles caching)
+# 2. CloudFront cache behavior with error response settings
+# 3. For granular status code control, use Lambda@Edge Origin Response
+resource "aws_cloudfront_cache_policy" "media_optimized" {
+  name        = "${var.bucket_name}-cache-policy"
+  comment     = "Optimized media cache policy - status codes managed via CloudFront behaviors"
+  default_ttl = 86400
+  max_ttl     = 31536000
+  min_ttl     = 0
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
+    headers_config {
+      header_behavior = "none"
+    }
+
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "media" {
   enabled         = true
   price_class     = var.cloudfront_price_class
@@ -103,6 +133,14 @@ resource "aws_cloudfront_distribution" "media" {
     origin_id                = "s3-origin"
     origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
     origin_path              = var.s3_cdn_path
+
+    dynamic "origin_shield" {
+      for_each = var.enable_origin_shield ? [1] : []
+      content {
+        enabled              = true
+        origin_shield_region = var.origin_shield_region
+      }
+    }
   }
 
   # Lambda Origin (condicional)
@@ -129,12 +167,10 @@ resource "aws_cloudfront_distribution" "media" {
     viewer_protocol_policy = "redirect-to-https"
     compress               = true
 
-    # Usar cache policy gerenciado otimizado para mídia
-    cache_policy_id = "658327ea-f89d-4fab-a63d-7e88639e58f6"
+    # Custom cache policy optimized for media
+    # Lambda returns no Cache-Control headers; CloudFront manages all caching
+    cache_policy_id = aws_cloudfront_cache_policy.media_optimized.id
 
-    min_ttl     = 0
-    default_ttl = 86400
-    max_ttl     = 31536000
     # Trusted key groups for signed URLs (use existing or newly created)
     trusted_key_groups = var.enable_signed_urls && local.signed_url_key_group_id != "" ? [local.signed_url_key_group_id] : []
   }
