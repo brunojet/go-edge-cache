@@ -117,6 +117,28 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	path := req.RawPath
 	log.Printf("Handling fallback request for path: '%s'", path)
 
+	// 0. Acquire distributed lock (prevent concurrent updates)
+	lockKey := fmt.Sprintf("cdn%s.lock", path)
+	lockErr := bucket.GetLockWait(ctx, lockKey, 30*time.Second, 30*time.Second)
+	if lockErr != nil {
+		log.Printf("LOCK: Failed to acquire lock for %s - %v", path, lockErr)
+		return &events.LambdaFunctionURLResponse{
+			StatusCode: 429,
+			Headers: map[string]string{
+				"Content-Type":  "text/plain",
+				"Retry-After":   "10",
+			},
+			Body:            "Cache update in progress",
+			IsBase64Encoded: false,
+		}, nil
+	}
+	defer func() {
+		if releaseErr := bucket.ReleaseLock(ctx, lockKey); releaseErr != nil {
+			log.Printf("WARN: failed to release lock for %s - %v", path, releaseErr)
+		}
+	}()
+	log.Printf("LOCK: Acquired lock for %s (30s TTL)", path)
+
 	// 1. Fetch from S3 origin (root path - no /cdn prefix)
 	log.Printf("Step 1: Fetching from S3 origin")
 	originBody, contentType, err := fetchFromS3Origin(ctx, path)
