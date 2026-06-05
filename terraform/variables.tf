@@ -85,58 +85,10 @@ variable "existing_cloudfront_key_group_id" {
   default     = ""
 }
 
-variable "existing_cloudfront_key_group_name" {
-  description = "Name of the existing CloudFront key group (for reference; not used for creation)"
-  type        = string
-  default     = ""
-}
-
-variable "enable_lambda" {
-  description = "Create Lambda function and related resources"
-  type        = bool
-  default     = false
-}
-
-variable "lambda_function_name" {
-  description = "Name for the Lambda function (defaults to bucket-based name)"
-  type        = string
-  default     = ""
-}
-
-variable "lambda_package_type" {
-  description = "Lambda package type: Zip or Image"
-  type        = string
-  default     = "Zip"
-}
-
-variable "lambda_s3_bucket" {
-  description = "S3 bucket containing Lambda Zip (when using Zip)"
-  type        = string
-  default     = ""
-}
-
-variable "lambda_s3_key" {
-  description = "S3 key for Lambda Zip (when using Zip)"
-  type        = string
-  default     = ""
-}
-
 variable "lambda_image_uri" {
   description = "Container image URI for Lambda (when using Image)"
   type        = string
   default     = ""
-}
-
-variable "lambda_runtime" {
-  description = "Lambda runtime (go1.x is deprecated, use provided.al2 for Go with custom bootstrap)"
-  type        = string
-  default     = "provided.al2"
-}
-
-variable "lambda_handler" {
-  description = "Lambda handler"
-  type        = string
-  default     = "main"
 }
 
 variable "lambda_environment" {
@@ -181,6 +133,36 @@ variable "lambda_logs_retention_in_days" {
   default     = 14
 }
 
+variable "enable_lambda" {
+  description = "Create Lambda function and related resources"
+  type        = bool
+  default     = false
+}
+
+variable "lambda_function_name" {
+  description = "Name for the Lambda function (defaults to bucket-based name)"
+  type        = string
+  default     = ""
+}
+
+variable "lambda_package_type" {
+  description = "Lambda package type: Zip or Image"
+  type        = string
+  default     = "Zip"
+}
+
+variable "lambda_runtime" {
+  description = "Lambda runtime (go1.x is deprecated, use provided.al2 for Go with custom bootstrap)"
+  type        = string
+  default     = "provided.al2"
+}
+
+variable "lambda_handler" {
+  description = "Lambda handler"
+  type        = string
+  default     = "main"
+}
+
 variable "enable_secrets" {
   description = "Create Secrets Manager secrets"
   type        = bool
@@ -195,6 +177,12 @@ variable "secrets_name" {
 
 variable "secrets_value" {
   description = "Secret plaintext value (use with caution)"
+  type        = string
+  default     = ""
+}
+
+variable "existing_cloudfront_key_group_name" {
+  description = "Name of the existing CloudFront key group (for reference; not used for creation)"
   type        = string
   default     = ""
 }

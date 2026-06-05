@@ -17,6 +17,17 @@ import (
 	storagecontracts "github.com/brunojet/go-infra-adapters/v4/pkg/storage/contracts"
 )
 
+const (
+	defaultS3Bucket         = "brunojet-media-proxy-dev"
+	defaultAWSRegion        = "us-east-1"
+	defaultCloudFrontDomain = "media.brunojet.com.br"
+	defaultSecretName       = "/go-edge-key-management/rotator"
+	defaultTMConcurrency    = 1
+	defaultTMPartSize       = 52428800  // 50MB
+	defaultTMThreshold      = 104857600 // 100MB
+	urlSignatureTTL         = 3600      // 1 hour
+)
+
 var (
 	storageAPI       storagecontracts.StorageAPI
 	bucket           storagecontracts.BucketAdapter
@@ -56,8 +67,8 @@ func getEnvOrDefaultInt64(key string, defaultVal int64) int64 {
 func init() {
 	log.Printf("=== Lambda Cold Start Initialization ===")
 
-	s3BucketName = getEnvOrDefault("S3_BUCKET", "brunojet-media-proxy-dev")
-	awsRegion = getEnvOrDefault("AWS_REGION", "us-east-1")
+	s3BucketName = getEnvOrDefault("S3_BUCKET", defaultS3Bucket)
+	awsRegion = getEnvOrDefault("AWS_REGION", defaultAWSRegion)
 
 	log.Printf("Initializing Lambda fallback handler")
 	log.Printf("  Configuration: bucket=%s, region=%s", s3BucketName, awsRegion)
@@ -65,9 +76,9 @@ func init() {
 	var err error
 	log.Printf("  Creating StorageAPI with region=%s", awsRegion)
 
-	tmConcurrency := getEnvOrDefaultInt("TM_CONCURRENCY", 1)
-	tmPartSize := getEnvOrDefaultInt64("TM_PART_SIZE", 52428800)  // 50MB
-	tmThreshold := getEnvOrDefaultInt64("TM_THRESHOLD", 104857600) // 100MB
+	tmConcurrency := getEnvOrDefaultInt("TM_CONCURRENCY", defaultTMConcurrency)
+	tmPartSize := getEnvOrDefaultInt64("TM_PART_SIZE", defaultTMPartSize)
+	tmThreshold := getEnvOrDefaultInt64("TM_THRESHOLD", defaultTMThreshold)
 
 	log.Printf("  Transfer Manager tuning: concurrency=%d, partSize=%dB, threshold=%dB",
 		tmConcurrency, tmPartSize, tmThreshold)
@@ -90,8 +101,8 @@ func init() {
 	}
 	log.Printf("  ✓ BucketAdapter created (transfer manager with 100%% streaming)")
 
-	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", "media.brunojet.com.br")
-	secretName = getEnvOrDefault("SECRET_NAME", "/go-edge-key-management/rotator") //nolint:gosec
+	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", defaultCloudFrontDomain)
+	secretName = getEnvOrDefault("SECRET_NAME", defaultSecretName) //nolint:gosec
 	log.Printf("  ✓ CloudFront signing configured")
 
 	log.Printf("=== Initialization Complete ===")
@@ -111,14 +122,7 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	originBody, contentType, err := fetchFromS3Origin(ctx, path)
 	if err != nil {
 		log.Printf("ERROR Step 1: origin fetch failed - %v", err)
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 404,
-			Headers: map[string]string{
-				"Content-Type": "text/plain",
-			},
-			Body:            "Not Found",
-			IsBase64Encoded: false,
-		}, nil
+		return errorResponse(404, "Not Found"), nil
 	}
 	defer func() {
 		if err := originBody.Close(); err != nil {
@@ -135,20 +139,13 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	err = uploadWithManager(ctx, s3Key, contentType, originBody)
 	if err != nil {
 		log.Printf("ERROR Step 2: Upload failed - %v", err)
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 502,
-			Headers: map[string]string{
-				"Content-Type": "text/plain",
-			},
-			Body:            "Upload failed",
-			IsBase64Encoded: false,
-		}, nil
+		return errorResponse(502, "Upload failed"), nil
 	}
 
 	// 3. Sign redirect URL and return 302
 	log.Printf("Step 3: Signing redirect URL")
 
-	signedURL, err := signRedirectURL(ctx, path, 3600) // Valid for 1 hour
+	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
 	if err != nil {
 		log.Printf("WARN: failed to sign URL: %v (returning 200 without cache)", err)
 		return &events.LambdaFunctionURLResponse{
@@ -236,6 +233,15 @@ func uploadWithManager(ctx context.Context, key, contentType string, body io.Rea
 // signRedirectURL signs a CloudFront URL using shared cdn package
 func signRedirectURL(ctx context.Context, path string, expiresIn int64) (string, error) {
 	return cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, expiresIn)
+}
+
+func errorResponse(statusCode int, body string) *events.LambdaFunctionURLResponse {
+	return &events.LambdaFunctionURLResponse{
+		StatusCode:      statusCode,
+		Headers:         map[string]string{"Content-Type": "text/plain"},
+		Body:            body,
+		IsBase64Encoded: false,
+	}
 }
 
 func main() {
