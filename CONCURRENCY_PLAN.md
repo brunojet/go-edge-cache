@@ -1,273 +1,102 @@
-# Concurrency Locks Implementation Plan
+# Concurrency Locks - Implementation Plan (Minimal)
 
 ## Objective
 
-Implement S3-based distributed locks using go-infra-adapters v4.2.1 to prevent:
-- Concurrent cache updates from multiple Lambda instances
-- Race conditions during multipart uploads
-- Duplicate cache processing for same media
+Protect critical section (download + upload) using S3 distributed locks.
 
-## Problem Statement
+```
+Lock(path) → [Fetch S3 + Upload /cdn] → Redirect 302
+```
 
-**Current Issue:**
-Multiple Lambda instances can simultaneously process the same media file:
-1. Lambda A fetches from S3 origin
-2. Lambda B fetches from S3 origin (same file, no coordination)
-3. Both upload to /cdn path → Last write wins (data loss risk)
-4. Both sign URLs → Redundant processing
+## Implementation
 
-**Cost/Performance Impact:**
-- Wasted S3 requests (duplicate uploads)
-- Concurrent signing operations
-- No deduplication guarantee
+### Single Lock Per Media File
 
-## Solution Architecture
+**Lock Key Pattern:**
+```
+cdn<path>.lock
+```
 
-### Lock Strategy
+**Lock Properties:**
+- TTL: 5 minutes (max Lambda execution + buffer)
+- Wait: Automatic with 10s timeout + exponential backoff
+- Release: Immediate after upload success/failure
 
-**Lock Levels (Hierarchical):**
-1. **Upload Lock** (Fine-grained)
-   - Path: `<cdn-prefix><media-path>.lock`
-   - TTL: 5 minutes (max Lambda execution time + buffer)
-   - Scope: Single media file upload
-   - Pattern: `GetLockWait()` with 10s timeout + backoff
+### Code Changes (cmd/fallback/main.go)
 
-2. **Processing Lock** (Coarse-grained)
-   - Path: `processing/<media-hash>.lock`
-   - TTL: 10 minutes
-   - Scope: Full processing pipeline (fetch → upload → sign)
-   - Pattern: `GetLockWait()` with 30s timeout
+**Location:** Inside `Handle()` function, after S3 fetch verification
 
-### Lock Implementation Phases
-
-#### Phase 1: Basic Upload Lock
 ```go
-// Prevent concurrent uploads to /cdn
+// 0. Acquire lock (new)
 lockKey := fmt.Sprintf("cdn%s.lock", path)
 if err := bucket.GetLockWait(ctx, lockKey, 5*time.Minute, 10*time.Second); err != nil {
+    log.Printf("LOCK: Failed to acquire lock for %s (timeout)", path)
     return errorResponse(429, "Cache update in progress")
 }
 defer bucket.ReleaseLock(ctx, lockKey)
 
-// Safe to upload without race condition
-uploadWithManager(ctx, s3Key, contentType, originBody)
-```
-
-**Where:** `cmd/fallback/main.go` - Handle() function (before uploadWithManager)
-
-**Metrics:**
-- Lock acquisition time
-- Lock contention count
-- 429 responses issued
-
-#### Phase 2: Dedup Processing Lock
-```go
-// Compute media hash from path
-mediaHash := computeHash(path)
-procKey := fmt.Sprintf("processing/%s.lock", mediaHash)
-
-// Acquire exclusive processing window
-if err := bucket.GetLockWait(ctx, procKey, 10*time.Minute, 30*time.Second); err != nil {
-    // Another instance processing, return cached result
-    log.Printf("CACHE: Processing in progress by another worker, retrieving cached result")
-    return getCachedSignedURL(ctx, path)
+// 1. Fetch from S3 origin (existing)
+originBody, contentType, err := fetchFromS3Origin(ctx, path)
+if err != nil {
+    return errorResponse(404, "Not Found"), nil
 }
-defer bucket.ReleaseLock(ctx, procKey)
+defer originBody.Close()
 
-// Exclusive processing window open
-// Fetch → Upload → Sign
-```
-
-**Where:** `cmd/fallback/main.go` - Handle() function (beginning, before fetch)
-
-**Cached Result Storage:**
-- Format: JSON metadata object in S3
-- Path: `processing/<media-hash>.json`
-- Contents: `{signed_url, expires_at, cache_time}`
-- TTL: Same as signed URL validity
-
-#### Phase 3: Metrics & Monitoring
-**CloudWatch Metrics:**
-- `LockAcquisitionTime` - Histogram (ms)
-- `LockContention` - Counter (429 responses)
-- `LockTimeouts` - Counter (failed acquisitions)
-- `CacheHitRate` - Percentage (dedup effectiveness)
-
-## File Structure
-
-```
-cmd/fallback/
-├── main.go                    # Handler + lock integration
-├── main_test.go              # Lock tests
-└── locks.go                  # (NEW) Lock helpers + dedup logic
-
-internal/
-├── locks/                    # (NEW)
-│   ├── locks.go             # Lock management interface
-│   ├── locks_test.go        # Lock unit tests
-│   └── dedup.go             # Deduplication helpers
-```
-
-## Lock API Usage
-
-### Method Signature (from go-infra-adapters v4.2.1)
-```go
-// BucketAdapter interface
-GetLock(ctx context.Context, key string, lockTTL time.Duration) error
-GetLockWait(ctx context.Context, key string, lockTTL, waitTimeout time.Duration) error
-ReleaseLock(ctx context.Context, key string) error
-```
-
-### Error Handling
-```go
-// Lock already exists → Caller waits or fails
-if err := bucket.GetLock(ctx, lockKey, 5*time.Minute); err != nil {
-    // Lock held by another instance
-    return errorResponse(429, "Processing in progress")
+// 2. Upload DIRECTLY to S3 /cdn (existing)
+s3Key := "cdn" + path
+err = uploadWithManager(ctx, s3Key, contentType, originBody)
+if err != nil {
+    return errorResponse(502, "Upload failed"), nil
 }
 
-// Lock with wait + backoff
-if err := bucket.GetLockWait(ctx, lockKey, 5*time.Minute, 10*time.Second); err != nil {
-    // Timeout after 10s of retries
-    return errorResponse(503, "Cache update timeout")
+// 3. Sign redirect URL and return (existing)
+signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
+if err != nil {
+    return errorResponse(200, "OK (unsigned)"), nil
+}
+
+return &events.LambdaFunctionURLResponse{
+    StatusCode: 302,
+    Headers:    map[string]string{"Location": signedURL},
+    Body:       "",
+}, nil
+```
+
+## Error Scenarios
+
+| Scenario | Lock Status | Response | HTTP Code |
+|----------|-------------|----------|-----------|
+| Lock acquired, success | Released | 302 redirect | 302 |
+| Lock timeout (10s) | Not held | Error | 429 |
+| Fetch fails | Released | 404 | 404 |
+| Upload fails | Released | 502 | 502 |
+| Sign fails | Released | 200 unsigned | 200 |
+
+## Testing
+
+### Unit Test
+```go
+func TestHandle_ConcurrentUploads(t *testing.T) {
+    // Simulate 2 concurrent requests same path
+    // Expect: 1 succeeds (302), 1 fails (429)
 }
 ```
 
-### Constraints & Guarantees
-- **Atomicity**: S3 conditional writes (IfNoneMatch: "*")
-- **TTL**: Automatic cleanup via S3 object expiration
-- **Idempotency**: `ReleaseLock()` safe to call multiple times
-- **Backoff**: Exponential (100ms → 2s) during GetLockWait()
-
-## Configuration
-
-### Environment Variables (New)
-
+### Integration Test
 ```bash
-# Lock timeout for initial acquisition attempt
-LOCK_WAIT_TIMEOUT=10          # seconds (default: 10)
+# Sequential: same path, 5 second interval
+curl https://media.example.com/file.bin  # → 302 ✓
+sleep 1
+curl https://media.example.com/file.bin  # → 302 ✓ (lock expired)
 
-# Processing lock TTL
-PROCESSING_LOCK_TTL=600       # seconds (default: 600 = 10 min)
-
-# Upload lock TTL
-UPLOAD_LOCK_TTL=300           # seconds (default: 300 = 5 min)
-
-# Enable deduplication caching
-ENABLE_DEDUP_CACHE=true       # boolean (default: true)
+# Parallel: same path, concurrent
+ab -c 2 -n 2 https://media.example.com/file.bin
+# → 1x 302, 1x 429 (one waits, timeout)
 ```
 
-### Terraform Variables
+## Summary
 
-```hcl
-variable "lock_timeout_seconds" {
-  description = "Lock wait timeout for cache updates"
-  type        = number
-  default     = 10
-}
-
-variable "processing_lock_ttl_seconds" {
-  description = "Processing lock TTL (should be > max Lambda duration)"
-  type        = number
-  default     = 600
-}
-
-variable "enable_lock_dedup" {
-  description = "Enable deduplication via locks"
-  type        = bool
-  default     = true
-}
-```
-
-## Testing Strategy
-
-### Unit Tests (internal/locks/)
-- `TestGetLock_Success` - Lock acquisition
-- `TestGetLock_AlreadyExists` - Lock conflict
-- `TestGetLockWait_Success` - Retry logic
-- `TestGetLockWait_Timeout` - Timeout enforcement
-- `TestReleaseLock_Idempotent` - Cleanup
-- `TestComputeHash` - Media hash consistency
-- `TestCachedResultStorage` - Metadata persistence
-
-### Integration Tests (cmd/fallback/)
-- `TestHandle_ConcurrentUploads` - Two instances same file
-- `TestHandle_UploadLockTimeout` - Lock timeout fallback
-- `TestHandle_DedupCacheHit` - Dedup working
-- `TestHandle_ProcessingLockExpiry` - TTL-based cleanup
-
-### Load Test
-```bash
-# Simulate 10 concurrent Lambda instances fetching same 200MB file
-ab -c 10 -n 10 https://media.example.com/large-file.bin
-# Expected: 1 successful upload, 9 return 429 or cached result
-```
-
-## Implementation Roadmap
-
-### Week 1: Phase 1 (Upload Lock)
-- [ ] Create `internal/locks/locks.go`
-- [ ] Add lock helpers to `cmd/fallback/main.go`
-- [ ] Add unit tests
-- [ ] Deploy to staging
-
-### Week 2: Phase 2 (Dedup Processing)
-- [ ] Implement dedup cache in `internal/locks/dedup.go`
-- [ ] Hash computation (SHA-256 on path)
-- [ ] Cached result storage/retrieval
-- [ ] Integration tests
-
-### Week 3: Phase 3 (Monitoring)
-- [ ] Add CloudWatch metrics
-- [ ] Dashboard creation
-- [ ] Alarms for contention
-
-## Success Criteria
-
-✅ **Functional:**
-- [ ] Multiple concurrent instances coordinate via locks
-- [ ] No duplicate uploads for same media
-- [ ] Dedup cache reduces processing 90%+
-- [ ] All tests passing
-
-✅ **Performance:**
-- [ ] Lock acquisition < 100ms (p99)
-- [ ] No timeout failures under normal load
-- [ ] Dedup cache hit rate > 80%
-
-✅ **Operational:**
-- [ ] CloudWatch metrics functional
-- [ ] Lock cleanup working (no stale locks)
-- [ ] Error handling graceful (429/503)
-
-## Risk Assessment
-
-| Risk | Probability | Impact | Mitigation |
-|------|------------|--------|-----------|
-| Lock timeout → 503 | Medium | Service slowdown | Tunable timeout, fallback to uncached |
-| Stale lock deadlock | Low | Permanent block | S3 TTL-based cleanup |
-| Hash collision | Very Low | Wrong cache hit | Use SHA-256, hash algorithm versioning |
-| S3 cost increase | Low | Budget | Lock cleanup via TTL, no extra requests |
-
-## Future Enhancements
-
-1. **Lock Leasing** - Extend TTL if processing continues
-2. **Lock Priority** - Priority queue for large uploads
-3. **Cross-Region** - DynamoDB-backed locks for multi-region
-4. **Metrics Export** - Prometheus integration
-5. **Lock Dashboard** - Real-time lock contention visualization
-
-## References
-
-- go-infra-adapters v4.2.1 Lock API
-- AWS S3 Conditional Writes (IfNoneMatch)
-- Distributed Lock Patterns
-
----
-
-## Approval Gate
-
-This plan requires:
-- [ ] Architecture review
-- [ ] Performance requirements sign-off
-- [ ] Go-live readiness check
+✅ Single lock protects download+upload  
+✅ Automatic wait with 10s timeout  
+✅ Simple error handling (429 for contention)  
+✅ No dedup, no caching - just serialization  
