@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -47,6 +48,15 @@ var (
 type BucketError struct {
 	StatusCode int
 	Error      error
+}
+
+// ProblemDetail implements RFC 7807 - Problem Details for HTTP APIs
+type ProblemDetail struct {
+	Type     string `json:"type"`
+	Title    string `json:"title"`
+	Status   int    `json:"status"`
+	Detail   string `json:"detail"`
+	Instance string `json:"instance,omitempty"`
 }
 
 // extractS3StatusCode parses S3 error message and extracts status code
@@ -216,8 +226,8 @@ func isCached(ctx context.Context, path string) (string, bool) {
 func handleResponse(ctx context.Context, mode, path, contentType string) (*events.LambdaFunctionURLResponse, error) {
 	signedURL, err := cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, urlSignatureTTL)
 	if err != nil {
-		message := fmt.Sprintf("URL signing failed for %s file %s: %v", mode, path, err)
-		return errorResponseInternal(http.StatusInternalServerError, message, true), nil
+		detail := fmt.Sprintf("URL signing failed for %s file %s: %v", mode, path, err)
+		return errorResponse(http.StatusInternalServerError, detail), nil
 	}
 	log.Printf("signed redirect (%s): %s", mode, signedURL)
 	return redirectResponse(signedURL), nil
@@ -235,22 +245,28 @@ func redirectResponse(signedURL string) *events.LambdaFunctionURLResponse {
 	}
 }
 
-func errorResponseInternal(statusCode int, message string, ignoreCache bool) *events.LambdaFunctionURLResponse {
-	log.Printf("ERROR: %s", message)
-	headers := map[string]string{"Content-Type": "text/plain"}
-	if ignoreCache {
-		headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+// errorResponse returns RFC 7807 Problem Details JSON response
+func errorResponse(statusCode int, detail string) *events.LambdaFunctionURLResponse {
+	log.Printf("ERROR: %d - %s", statusCode, detail)
+
+	problem := ProblemDetail{
+		Type:   fmt.Sprintf("about:blank"), // Standard when no specific type
+		Title:  http.StatusText(statusCode),
+		Status: statusCode,
+		Detail: detail,
 	}
+
+	body, _ := json.Marshal(problem)
+
 	return &events.LambdaFunctionURLResponse{
-		StatusCode:      statusCode,
-		Headers:         headers,
-		Body:            message,
+		StatusCode: statusCode,
+		Headers: map[string]string{
+			"Content-Type":  "application/problem+json",
+			"Cache-Control": "no-cache, no-store, must-revalidate",
+		},
+		Body:            string(body),
 		IsBase64Encoded: false,
 	}
-}
-
-func errorResponse(statusCode int, body string) *events.LambdaFunctionURLResponse {
-	return errorResponseInternal(statusCode, body, false)
 }
 
 func main() {
