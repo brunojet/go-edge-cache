@@ -19,6 +19,10 @@ import (
 	storagecontracts "github.com/brunojet/go-infra-adapters/v4/pkg/storage/contracts"
 )
 
+const (
+	urlSignatureTTL int64 = 3600 // 1 hour
+)
+
 var (
 	storageAPI       storagecontracts.StorageAPI
 	bucket           storagecontracts.BucketAdapter
@@ -123,85 +127,117 @@ func init() {
 // Handle is the Lambda handler entry point.
 // 100% STREAMING: Download → Upload (NO buffering in between)
 func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
-	// Log event for debugging
-	log.Printf("DEBUG: Event received - RawPath='%s'", req.RawPath)
-
 	path := req.RawPath
+	log.Printf("DEBUG: Event received - RawPath='%s'", path)
 	log.Printf("Handling fallback request for path: '%s'", path)
 
-	// 1. Fetch from S3 origin (root path - no /cdn prefix)
+	// 0. Acquire distributed lock (prevent concurrent updates)
+	lockKey := fmt.Sprintf("cdn%s.lock", path)
+	if lockErr := bucket.GetLockWait(ctx, lockKey, 30*time.Second, 30*time.Second); lockErr != nil {
+		log.Printf("LOCK: Failed to acquire lock for %s - %v", path, lockErr)
+		return errorResponse(429, "Cache update in progress"), nil
+	}
+	// Lock acquired successfully
+	defer func() {
+		if releaseErr := bucket.ReleaseLock(ctx, lockKey); releaseErr != nil {
+			log.Printf("WARN: failed to release lock for %s - %v", path, releaseErr)
+		}
+	}()
+	log.Printf("LOCK: Acquired lock for %s (30s TTL)", path)
+
+	// 1. Check if already cached in /cdn
+	cachedContentType, cacheExists := isCached(ctx, path)
+	if cacheExists {
+		log.Printf("CACHE HIT: File already cached in /cdn for %s", path)
+		return handleCachedFile(ctx, path, cachedContentType)
+	}
+
+	// 2. Not cached - fetch from origin and upload to /cdn
+	log.Printf("CACHE MISS: Fetching from origin and uploading to /cdn")
+	return handleCacheMiss(ctx, path)
+}
+
+// isCached checks if file already exists in /cdn cache
+func isCached(ctx context.Context, path string) (string, bool) {
+	s3Key := "cdn" + path
+	objInfo := &storagecontracts.ObjectInfo{}
+	err := bucket.HeadObject(ctx, s3Key, objInfo)
+	if err != nil {
+		log.Printf("  Cache check failed for %s - %v", s3Key, err)
+		return "", false
+	}
+	log.Printf("  Cache check OK: %s exists (size=%d)", s3Key, objInfo.Size)
+	return objInfo.ContentType, true
+}
+
+// handleCachedFile signs and returns cached file
+func handleCachedFile(ctx context.Context, path, contentType string) (*events.LambdaFunctionURLResponse, error) {
+	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
+	if err != nil {
+		log.Printf("WARN: failed to sign URL for cached file: %v", err)
+		return errorResponse(200, "OK (unsigned)"), nil
+	}
+	log.Printf("SUCCESS: Serving cached file - signed URL generated")
+	return &events.LambdaFunctionURLResponse{
+		StatusCode: 302,
+		Headers:    map[string]string{"Location": signedURL},
+		Body:       "",
+	}, nil
+}
+
+// handleCacheMiss fetches from origin, uploads to cache, and signs
+func handleCacheMiss(ctx context.Context, path string) (*events.LambdaFunctionURLResponse, error) {
+	// Step 1: Fetch from S3 origin
 	log.Printf("Step 1: Fetching from S3 origin")
 	originBody, contentType, err := fetchFromS3Origin(ctx, path)
 	if err != nil {
 		log.Printf("ERROR Step 1: origin fetch failed - %v", err)
-		// Cache 404 errors for 5 minutes to reduce origin load
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 404,
-			Headers: map[string]string{
-				"Content-Type":  "text/plain",
-				"Cache-Control": "public, max-age=300", // Cache 404 for 5 minutes
-			},
-			Body:            "Not Found",
-			IsBase64Encoded: false,
-		}, nil
+		return errorResponse(404, "Not Found"), nil
 	}
 	defer func() {
 		if err := originBody.Close(); err != nil {
 			log.Printf("WARN: failed to close origin body: %v", err)
 		}
 	}()
-
 	log.Printf("Step 1 OK: Fetched from S3 origin - ContentType=%s", contentType)
 
-	// 2. Upload DIRECTLY to S3 /cdn (100% STREAMING - NO BUFFERING!)
+	// Step 2: Upload to /cdn (100% STREAMING - NO BUFFERING!)
 	s3Key := "cdn" + path
 	log.Printf("Step 2: Uploading to S3 cache (STREAMING) - %s", s3Key)
-
-	err = uploadWithManager(ctx, s3Key, contentType, originBody)
-	if err != nil {
+	if err := uploadWithManager(ctx, s3Key, contentType, originBody); err != nil {
 		log.Printf("ERROR Step 2: Upload failed - %v", err)
-		// Cache 502 errors for 1 minute to reduce origin load during outages
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 502,
-			Headers: map[string]string{
-				"Content-Type":  "text/plain",
-				"Cache-Control": "public, max-age=60", // Cache 502 for 1 minute
-			},
-			Body:            "Upload failed",
-			IsBase64Encoded: false,
-		}, nil
+		return errorResponse(502, "Upload failed"), nil
 	}
+	log.Printf("Step 2 OK: Uploaded to cache")
 
-	// 3. Sign redirect URL and return 302
+	// Step 3: Sign redirect URL
 	log.Printf("Step 3: Signing redirect URL")
-
-	signedURL, err := signRedirectURL(ctx, path, 3600) // Valid for 1 hour
+	signedURL, err := signRedirectURL(ctx, path, urlSignatureTTL)
 	if err != nil {
-		log.Printf("WARN: failed to sign URL: %v (returning 200 without cache)", err)
-		// Don't cache signing failures - try again on next request
-		return &events.LambdaFunctionURLResponse{
-			StatusCode: 200,
-			Headers: map[string]string{
-				"Content-Type":  contentType,
-				"Cache-Control": "no-cache, no-store, must-revalidate",
-			},
-			Body:            "OK (unsigned)",
-			IsBase64Encoded: false,
-		}, nil
+		log.Printf("WARN: failed to sign URL: %v", err)
+		return errorResponse(200, "OK (unsigned)"), nil
 	}
-
 	log.Printf("SUCCESS: 100%% streaming upload complete - redirect to signed URL")
-	log.Printf("  Signed URL: %s", signedURL)
-
 	return &events.LambdaFunctionURLResponse{
 		StatusCode: 302,
-		Headers: map[string]string{
-			"Location":      signedURL,
-			"Cache-Control": "no-cache, no-store, must-revalidate", // Don't cache 302 redirects
-		},
-		Body:            "",
-		IsBase64Encoded: false,
+		Headers:    map[string]string{"Location": signedURL},
+		Body:       "",
 	}, nil
+}
+
+// errorResponse builds error response with appropriate headers
+func errorResponse(statusCode int, body string) *events.LambdaFunctionURLResponse {
+	resp := &events.LambdaFunctionURLResponse{
+		StatusCode:      statusCode,
+		Headers:         map[string]string{"Content-Type": "text/plain"},
+		Body:            body,
+		IsBase64Encoded: false,
+	}
+	// Add Retry-After for 429 (Too Many Requests)
+	if statusCode == 429 {
+		resp.Headers["Retry-After"] = "10"
+	}
+	return resp
 }
 
 // fetchFromS3Origin fetches object from S3 root using BucketAdapter

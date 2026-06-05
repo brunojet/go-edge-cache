@@ -42,8 +42,8 @@ github.com/aws/aws-sdk-go-v2/service/sts v1.43.2 h1:RTO7mmGyedgnNmcPh3yQizNfc6GK
 github.com/aws/aws-sdk-go-v2/service/sts v1.43.2/go.mod h1:fBhUZXDin9YYqhcpOMjIcpdik25rVwWyxLdPH1RZd9s=
 github.com/aws/smithy-go v1.27.1 h1:4T340VFndXtADGF52gYa1POyL7s9E4Z1OeZ1hCscIw8=
 github.com/aws/smithy-go v1.27.1/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
-github.com/brunojet/go-infra-adapters/v4 v4.1.0 h1:h0VWXadK/0XEWqbPr857anuPz3Q3HyEtw/HpCEUbHG8=
-github.com/brunojet/go-infra-adapters/v4 v4.1.0/go.mod h1:DRxSf/o1yrT2xkrwic3caRJtU2N1T9w3hk6FxLUCOIU=
+github.com/brunojet/go-infra-adapters/v4 v4.2.1 h1:0IVqlmNQJnBFlOz1JRwH9bWjsUzxRCJe8Y6C0X1Z48E=
+github.com/brunojet/go-infra-adapters/v4 v4.2.1/go.mod h1:DRxSf/o1yrT2xkrwic3caRJtU2N1T9w3hk6FxLUCOIU=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/golang/mock v1.6.0 h1:ErTB+efbowRARo13NNdxyJji2egdxLGQhRaY+DUumQc=
