@@ -37,8 +37,8 @@ lambda_environment = {
   S3_BUCKET = "brunojet-media-proxy-dev"
   # Transfer manager tuning for large files
   TM_CONCURRENCY = "1"                     # Sequential processing for stability
-  TM_PART_SIZE = "52428800"                 # 50MB parts for 900MB files
-  TM_THRESHOLD = "104857600"                # 100MB multipart threshold
+  TM_PART_SIZE = "26214400"                 # 25MB parts (5x default 5MB - conservative)
+  TM_THRESHOLD = "52428800"                 # 50MB multipart threshold (5x default 10MB)
 }
 
 # S3 Cache Settings
