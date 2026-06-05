@@ -24,9 +24,11 @@ const (
 	defaultCloudFrontDomain = "media.brunojet.com.br"
 	defaultSecretName       = "/go-edge-key-management/rotator" //nolint:gosec // Path to AWS Secrets Manager, not a credential
 	defaultTMConcurrency    = 1
-	defaultTMPartSize       = 52428800  // 50MB
-	defaultTMThreshold      = 104857600 // 100MB
-	urlSignatureTTL         = 3600      // 1 hour
+	defaultTMPartSize       = 26214400 // 25MB
+	defaultTMThreshold      = 52428800 // 50MB
+	urlSignatureTTL         = 900      // 15 minutes
+	defaultLockTTL          = 60
+	defaultLockWaitTimeout  = 70
 )
 
 var (
@@ -67,25 +69,12 @@ func getEnvOrDefaultInt64(key string, defaultVal int64) int64 {
 
 func init() {
 	log.Printf("=== Lambda Cold Start Initialization ===")
-
-	s3BucketName = getEnvOrDefault("S3_BUCKET", defaultS3Bucket)
-	awsRegion = getEnvOrDefault("AWS_REGION", defaultAWSRegion)
-
-	log.Printf("Initializing Lambda fallback handler")
-	log.Printf("  Configuration: bucket=%s, region=%s", s3BucketName, awsRegion)
-
-	var err error
-	log.Printf("  Creating StorageAPI with region=%s", awsRegion)
-
 	tmConcurrency := getEnvOrDefaultInt("TM_CONCURRENCY", defaultTMConcurrency)
 	tmPartSize := getEnvOrDefaultInt64("TM_PART_SIZE", defaultTMPartSize)
 	tmThreshold := getEnvOrDefaultInt64("TM_THRESHOLD", defaultTMThreshold)
-
 	log.Printf("  Transfer Manager tuning: concurrency=%d, partSize=%dB, threshold=%dB",
 		tmConcurrency, tmPartSize, tmThreshold)
-
-	storageAPI, err = storageadapters.NewStorageAPI(
-		storageadapters.WithRegion(awsRegion),
+	storageAPI, err := storageadapters.NewStorageAPI(
 		storageadapters.WithTransferManagerConcurrency(tmConcurrency),
 		storageadapters.WithTransferManagerPartSize(tmPartSize),
 		storageadapters.WithTransferManagerThreshold(tmThreshold),
@@ -94,40 +83,33 @@ func init() {
 		log.Fatalf("FATAL: failed to create storage API: %v", err)
 	}
 	log.Printf("  ✓ StorageAPI created with transfer manager tuning")
-
+	s3BucketName = getEnvOrDefault("S3_BUCKET", defaultS3Bucket)
 	log.Printf("  Creating BucketAdapter for bucket=%s", s3BucketName)
 	bucket, err = storageAPI.NewBucket(s3BucketName)
 	if err != nil {
 		log.Fatalf("FATAL: failed to create bucket adapter: %v", err)
 	}
-	log.Printf("  ✓ BucketAdapter created (transfer manager with 100%% streaming)")
-
 	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", defaultCloudFrontDomain)
 	secretName = getEnvOrDefault("SECRET_NAME", defaultSecretName) //nolint:gosec // Path to external secret, not a credential
-	log.Printf("  ✓ CloudFront signing configured")
-
 	log.Printf("=== Initialization Complete ===")
 }
 
 // Handle is the Lambda handler entry point.
 // 100% STREAMING: Download → Upload (NO buffering in between)
 func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
-	// Log event for debugging
-	log.Printf("DEBUG: Event received - RawPath='%s'", req.RawPath)
-
 	path := req.RawPath
-	log.Printf("Handling fallback request for path: '%s'", path)
+	log.Printf("Handling request for path: '%s'", path)
 
 	// 0. Acquire distributed lock (prevent concurrent updates)
 	lockKey := fmt.Sprintf("cdn%s.lock", path)
-	lockErr := bucket.GetLockWait(ctx, lockKey, 30*time.Second, 30*time.Second)
+	lockErr := bucket.GetLockWait(ctx, lockKey, defaultLockTTL*time.Second, defaultLockWaitTimeout*time.Second)
 	if lockErr != nil {
 		log.Printf("LOCK: Failed to acquire lock for %s - %v", path, lockErr)
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 429,
 			Headers: map[string]string{
-				"Content-Type":  "text/plain",
-				"Retry-After":   "10",
+				"Content-Type": "text/plain",
+				"Retry-After":  "10",
 			},
 			Body:            "Cache update in progress",
 			IsBase64Encoded: false,
@@ -138,7 +120,7 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 			log.Printf("WARN: failed to release lock for %s - %v", path, releaseErr)
 		}
 	}()
-	log.Printf("LOCK: Acquired lock for %s (30s TTL)", path)
+	log.Printf("LOCK: Acquired lock for %s (%ds TTL)", path, defaultLockTTL)
 
 	// 1. Fetch from S3 origin (root path - no /cdn prefix)
 	log.Printf("Step 1: Fetching from S3 origin")
@@ -181,8 +163,7 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 		}, nil
 	}
 
-	log.Printf("SUCCESS: 100%% streaming upload complete - redirect to signed URL")
-	log.Printf("  Signed URL: %s", signedURL)
+	log.Printf("SUCCESS: Upload complete - returning signed redirect (302)")
 
 	return &events.LambdaFunctionURLResponse{
 		StatusCode: 302,
