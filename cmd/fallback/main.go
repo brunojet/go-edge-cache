@@ -110,7 +110,7 @@ func init() {
 
 	secretName = os.Getenv("SECRET_NAME")
 	if secretName == "" {
-		secretName = "/go-edge-key-management/rotator"
+		secretName = "/go-edge-key-management/rotator" //nolint:gosec // This is an AWS Secrets Manager path, not a credential
 		log.Printf("  WARN: SECRET_NAME env not set, using default: %s", secretName)
 	} else {
 		log.Printf("  OK: SECRET_NAME from environment: %s", secretName)
@@ -145,7 +145,11 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 			IsBase64Encoded: false,
 		}, nil
 	}
-	defer originBody.Close()
+	defer func() {
+		if err := originBody.Close(); err != nil {
+			log.Printf("WARN: failed to close origin body: %v", err)
+		}
+	}()
 
 	log.Printf("Step 1 OK: Fetched from S3 origin - ContentType=%s", contentType)
 
