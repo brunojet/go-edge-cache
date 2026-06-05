@@ -20,13 +20,13 @@ tags = {
   Environment = "dev"
 }
 
-# Lambda configuration
+# Lambda configuration (tuned for 900MB extreme test)
 enable_lambda              = true
 lambda_function_name       = "brunojet-media-proxy-dev-origin-lambda"
 lambda_runtime             = "provided.al2"  # Go with custom bootstrap
 lambda_handler             = "main"
-lambda_memory_size         = 512
-lambda_timeout             = 60  # Aumentado de 30s para dar tempo de buffering
+lambda_memory_size         = 900             # 900MB for extreme test (large file transfers)
+lambda_timeout             = 300             # 5 minutes for 900MB uploads with streaming
 lambda_package_type        = "Zip"
 lambda_publish             = false
 lambda_create_function_url = true           # Enable Function URL for CloudFront
@@ -35,6 +35,10 @@ lambda_function_url_auth_type = "NONE"      # Public, CloudFront signed with OAC
 # Lambda environment variables (for configuration)
 lambda_environment = {
   S3_BUCKET = "brunojet-media-proxy-dev"
+  # Transfer manager tuning for large files
+  TM_CONCURRENCY = "1"                     # Sequential processing for stability
+  TM_PART_SIZE = "52428800"                 # 50MB parts for 900MB files
+  TM_THRESHOLD = "104857600"                # 100MB multipart threshold
 }
 
 # S3 Cache Settings
