@@ -61,7 +61,6 @@ func TestHandleErrorResponses(t *testing.T) {
 	}
 }
 
-
 func TestGetEnvOrDefault(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -78,10 +77,10 @@ func TestGetEnvOrDefault(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.value != "" {
-				os.Setenv(tt.key, tt.value)
-				defer os.Unsetenv(tt.key)
+				_ = os.Setenv(tt.key, tt.value)
+				defer func() { _ = os.Unsetenv(tt.key) }()
 			} else {
-				os.Unsetenv(tt.key)
+				_ = os.Unsetenv(tt.key)
 			}
 
 			result := getEnvOrDefault(tt.key, tt.defaultVal)
@@ -110,10 +109,10 @@ func TestGetEnvOrDefaultInt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.value != "" {
-				os.Setenv(tt.key, tt.value)
-				defer os.Unsetenv(tt.key)
+				_ = os.Setenv(tt.key, tt.value)
+				defer func() { _ = os.Unsetenv(tt.key) }()
 			} else {
-				os.Unsetenv(tt.key)
+				_ = os.Unsetenv(tt.key)
 			}
 
 			result := getEnvOrDefaultInt(tt.key, tt.defaultVal)
@@ -141,10 +140,10 @@ func TestGetEnvOrDefaultInt64(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.value != "" {
-				os.Setenv(tt.key, tt.value)
-				defer os.Unsetenv(tt.key)
+				_ = os.Setenv(tt.key, tt.value)
+				defer func() { _ = os.Unsetenv(tt.key) }()
 			} else {
-				os.Unsetenv(tt.key)
+				_ = os.Unsetenv(tt.key)
 			}
 
 			result := getEnvOrDefaultInt64(tt.key, tt.defaultVal)

@@ -21,7 +21,7 @@ const (
 	defaultS3Bucket         = "brunojet-media-proxy-dev"
 	defaultAWSRegion        = "us-east-1"
 	defaultCloudFrontDomain = "media.brunojet.com.br"
-	defaultSecretName       = "/go-edge-key-management/rotator"
+	defaultSecretName       = "/go-edge-key-management/rotator" //nolint:gosec // Path to AWS Secrets Manager, not a credential
 	defaultTMConcurrency    = 1
 	defaultTMPartSize       = 52428800  // 50MB
 	defaultTMThreshold      = 104857600 // 100MB
@@ -39,10 +39,10 @@ var (
 
 func getEnvOrDefault(key, defaultVal string) string {
 	if val := os.Getenv(key); val != "" {
-		log.Printf("  OK: %s from environment: %s", key, val)
+		log.Printf("  OK: %s from environment", key) //nolint:gosec // Variable names only, not values
 		return val
 	}
-	log.Printf("  WARN: %s env not set, using default: %s", key, defaultVal)
+	log.Printf("  WARN: %s env not set, using default", key) //nolint:gosec // Variable names only, not values
 	return defaultVal
 }
 
@@ -102,7 +102,7 @@ func init() {
 	log.Printf("  ✓ BucketAdapter created (transfer manager with 100%% streaming)")
 
 	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", defaultCloudFrontDomain)
-	secretName = getEnvOrDefault("SECRET_NAME", defaultSecretName) //nolint:gosec
+	secretName = getEnvOrDefault("SECRET_NAME", defaultSecretName) //nolint:gosec // Path to external secret, not a credential
 	log.Printf("  ✓ CloudFront signing configured")
 
 	log.Printf("=== Initialization Complete ===")

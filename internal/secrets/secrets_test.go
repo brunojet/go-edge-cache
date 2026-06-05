@@ -35,4 +35,3 @@ func TestPayloadStructure(t *testing.T) {
 		t.Error("PrivatePEM should not be empty")
 	}
 }
-
