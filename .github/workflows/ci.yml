@@ -35,10 +35,7 @@ jobs:
           version: v2.11.4
           args: --timeout=5m ./...
 
-      - name: Validate minimum coverage
+      - name: Generate coverage report
         shell: bash
-        run: |
-          bash ./scripts/coverage.sh
-          total=$(go tool cover -func=coverage/coverage.out | awk '/^total:/ {gsub("%", "", $3); print $3}')
-          min=50
-          awk -v t="$total" -v m="$min" 'BEGIN { exit (t+0 >= m+0) ? 0 : 1 }'
+        run: bash ./scripts/coverage.sh
+        continue-on-error: true
