@@ -11,10 +11,6 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
 
 	cdnadapter "github.com/brunojet/go-infra-adapters/v4/pkg/cdn"
 	secretaws "github.com/brunojet/go-infra-adapters/v4/pkg/secret/aws"
@@ -29,8 +25,6 @@ var (
 	awsRegion        string
 	cloudFrontDomain string
 	secretName       string
-	s3Client         *s3.Client
-	tmClient         *transfermanager.Client // Transfer Manager for streaming with retry
 )
 
 func init() {
@@ -73,24 +67,7 @@ func init() {
 	if err != nil {
 		log.Fatalf("FATAL: failed to create bucket adapter: %v", err)
 	}
-	log.Printf("  ✓ BucketAdapter created")
-
-	// Initialize S3 client + Transfer Manager for streaming with retry
-	log.Printf("  Creating S3 Transfer Manager (100% streaming)")
-	cfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(awsRegion))
-	if err != nil {
-		log.Fatalf("FATAL: failed to load AWS config: %v", err)
-	}
-	s3Client = s3.NewFromConfig(cfg)
-	// ✅ Transfer Manager SEM concorrência (evita slice bounds bug)
-	// ✅ Configuração correta - New() retorna *transfermanager.Client
-	tmClient = transfermanager.New(s3Client, func(options *transfermanager.Options) {
-		// Configurações para evitar concurrent reads
-		options.Concurrency = 1                             // ✅ SEM threads paralelas
-		options.PartSizeBytes = 5 * 1024 * 1024             // 5MB por parte
-		options.MultipartUploadThreshold = 10 * 1024 * 1024 // 10MB threshold
-	})
-	log.Printf("  ✓ Transfer Manager created (PartBodyMaxRetries=3 auto-retry)")
+	log.Printf("  ✓ BucketAdapter created (transfer manager with 100% streaming)")
 
 	// Initialize CloudFront signing for redirect URLs
 	cloudFrontDomain = os.Getenv("CLOUDFRONT_DOMAIN")
@@ -132,7 +109,7 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 			StatusCode: 404,
 			Headers: map[string]string{
 				"Content-Type":  "text/plain",
-				"Cache-Control": "public, max-age=300",  // Cache 404 for 5 minutes
+				"Cache-Control": "public, max-age=300", // Cache 404 for 5 minutes
 			},
 			Body:            "Not Found",
 			IsBase64Encoded: false,
@@ -154,7 +131,7 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 			StatusCode: 502,
 			Headers: map[string]string{
 				"Content-Type":  "text/plain",
-				"Cache-Control": "public, max-age=60",  // Cache 502 for 1 minute
+				"Cache-Control": "public, max-age=60", // Cache 502 for 1 minute
 			},
 			Body:            "Upload failed",
 			IsBase64Encoded: false,
@@ -186,19 +163,16 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 		StatusCode: 302,
 		Headers: map[string]string{
 			"Location":      signedURL,
-			"Cache-Control": "no-cache, no-store, must-revalidate",  // Don't cache 302 redirects
+			"Cache-Control": "no-cache, no-store, must-revalidate", // Don't cache 302 redirects
 		},
 		Body:            "",
 		IsBase64Encoded: false,
 	}, nil
 }
 
-// fetchFromS3Origin fetches object from S3 root using Transfer Manager GetObject
-// Returns io.ReadCloser (streaming) with automatic retry
+// fetchFromS3Origin fetches object from S3 root using BucketAdapter
+// Uses transfer manager internally for automatic retry and streaming
 func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string, error) {
-	// getCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	// defer cancel()
-
 	// Remove leading slash for S3 key
 	s3Key := path
 	if s3Key != "" && s3Key[0] == '/' {
@@ -209,50 +183,49 @@ func fetchFromS3Origin(ctx context.Context, path string) (io.ReadCloser, string,
 		return nil, "", fmt.Errorf("empty path")
 	}
 
-	log.Printf("  DEBUG: GetObject from S3 - bucket=%s, key=%s", s3BucketName, s3Key)
+	log.Printf("  DEBUG: GetObject from S3 - key=%s", s3Key)
 
-	// Use Transfer Manager GetObject (automatic retry, io.Reader streaming)
-	getResult, err := tmClient.GetObject(ctx, &transfermanager.GetObjectInput{
-		Bucket: aws.String(s3BucketName),
-		Key:    aws.String(s3Key),
-	})
+	// Use BucketAdapter.GetObject (abstracts transfer manager with retry)
+	obj := &storagecontracts.BucketObject{}
+	err := bucket.GetObject(ctx, s3Key, obj)
 	if err != nil {
 		log.Printf("  ERROR: GetObject failed - %v", err)
 		return nil, "", fmt.Errorf("getobject failed: %w", err)
 	}
 
-	// Get content type
-	contentType := "application/octet-stream"
-	if getResult.ContentType != nil {
-		contentType = *getResult.ContentType
+	contentType := obj.Info.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
 	}
 
-	log.Printf("  DEBUG: GetObject success - ContentType=%s", contentType)
+	log.Printf("  DEBUG: GetObject success - ContentType=%s, Size=%d", contentType, obj.Info.Size)
 
-	// IMPORTANT: Return getResult.Body as io.ReadCloser for streaming
-	// This is passed directly to uploadWithManager (no buffering!)
-	return io.NopCloser(getResult.Body), contentType, nil
+	// Return streaming body (transfer manager handles retry internally)
+	return obj.Body, contentType, nil
 }
 
-// uploadWithManager uses Transfer Manager Uploader for streaming with auto-retry
+// uploadWithManager uses BucketAdapter for streaming upload with auto-retry
 // Body is streamed directly (100% streaming - NO buffering!)
 func uploadWithManager(ctx context.Context, key, contentType string, body io.Reader) error {
 	log.Printf("  DEBUG: UploadObject - key=%s, contentType=%s", key, contentType)
 
-	// Transfer Manager handles multipart + retry automatically (PartBodyMaxRetries=3 default)
-	result, err := tmClient.UploadObject(ctx, &transfermanager.UploadObjectInput{
-		Bucket:      aws.String(s3BucketName),
-		Key:         aws.String(key),
-		Body:        body, // ← STREAMING (io.Reader) directly!
-		ContentType: aws.String(contentType),
-	})
+	// Use BucketAdapter.PutObject (abstracts transfer manager with retry)
+	// Transfer manager handles multipart + retry automatically
+	obj := &storagecontracts.BucketObject{
+		Info: storagecontracts.ObjectInfo{
+			Key:         key,
+			ContentType: contentType,
+		},
+		Body: io.NopCloser(body), // ← STREAMING directly to adapter!
+	}
 
+	err := bucket.PutObject(ctx, obj)
 	if err != nil {
 		log.Printf("  ERROR: Upload failed - %v", err)
 		return fmt.Errorf("upload failed: %w", err)
 	}
 
-	log.Printf("  DEBUG: Upload success - Location=%s", result.Location)
+	log.Printf("  DEBUG: Upload success - key=%s", key)
 	return nil
 }
 
