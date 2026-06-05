@@ -26,54 +26,48 @@ var (
 	secretName       string
 )
 
+func getEnvOrDefault(key, defaultVal string) string {
+	if val := os.Getenv(key); val != "" {
+		log.Printf("  OK: %s from environment: %s", key, val)
+		return val
+	}
+	log.Printf("  WARN: %s env not set, using default: %s", key, defaultVal)
+	return defaultVal
+}
+
+func getEnvOrDefaultInt(key string, defaultVal int) int {
+	if val := os.Getenv(key); val != "" {
+		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultVal
+}
+
+func getEnvOrDefaultInt64(key string, defaultVal int64) int64 {
+	if val := os.Getenv(key); val != "" {
+		if parsed, err := strconv.ParseInt(val, 10, 64); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultVal
+}
+
 func init() {
 	log.Printf("=== Lambda Cold Start Initialization ===")
 
-	// Load S3 configuration from environment
-	s3BucketName = os.Getenv("S3_BUCKET")
-	if s3BucketName == "" {
-		s3BucketName = "brunojet-media-proxy-dev"
-		log.Printf("  WARN: S3_BUCKET env not set, using default: %s", s3BucketName)
-	} else {
-		log.Printf("  OK: S3_BUCKET from environment: %s", s3BucketName)
-	}
-
-	awsRegion = os.Getenv("AWS_REGION")
-	if awsRegion == "" {
-		awsRegion = "us-east-1"
-		log.Printf("  WARN: AWS_REGION env not set, using default: %s", awsRegion)
-	} else {
-		log.Printf("  OK: AWS_REGION from environment: %s", awsRegion)
-	}
+	s3BucketName = getEnvOrDefault("S3_BUCKET", "brunojet-media-proxy-dev")
+	awsRegion = getEnvOrDefault("AWS_REGION", "us-east-1")
 
 	log.Printf("Initializing Lambda fallback handler")
 	log.Printf("  Configuration: bucket=%s, region=%s", s3BucketName, awsRegion)
 
-	// Initialize StorageAPI (once on cold start)
 	var err error
 	log.Printf("  Creating StorageAPI with region=%s", awsRegion)
 
-	// Parse transfer manager tuning from environment
-	tmConcurrency := 1
-	if c := os.Getenv("TM_CONCURRENCY"); c != "" {
-		if parsed, err := strconv.Atoi(c); err == nil && parsed > 0 {
-			tmConcurrency = parsed
-		}
-	}
-
-	tmPartSize := int64(52428800) // 50MB default
-	if p := os.Getenv("TM_PART_SIZE"); p != "" {
-		if parsed, err := strconv.ParseInt(p, 10, 64); err == nil && parsed > 0 {
-			tmPartSize = parsed
-		}
-	}
-
-	tmThreshold := int64(104857600) // 100MB default
-	if t := os.Getenv("TM_THRESHOLD"); t != "" {
-		if parsed, err := strconv.ParseInt(t, 10, 64); err == nil && parsed > 0 {
-			tmThreshold = parsed
-		}
-	}
+	tmConcurrency := getEnvOrDefaultInt("TM_CONCURRENCY", 1)
+	tmPartSize := getEnvOrDefaultInt64("TM_PART_SIZE", 52428800)  // 50MB
+	tmThreshold := getEnvOrDefaultInt64("TM_THRESHOLD", 104857600) // 100MB
 
 	log.Printf("  Transfer Manager tuning: concurrency=%d, partSize=%dB, threshold=%dB",
 		tmConcurrency, tmPartSize, tmThreshold)
@@ -89,7 +83,6 @@ func init() {
 	}
 	log.Printf("  ✓ StorageAPI created with transfer manager tuning")
 
-	// Create adapter for bucket
 	log.Printf("  Creating BucketAdapter for bucket=%s", s3BucketName)
 	bucket, err = storageAPI.NewBucket(s3BucketName)
 	if err != nil {
@@ -97,22 +90,8 @@ func init() {
 	}
 	log.Printf("  ✓ BucketAdapter created (transfer manager with 100%% streaming)")
 
-	// Initialize CloudFront signing for redirect URLs
-	cloudFrontDomain = os.Getenv("CLOUDFRONT_DOMAIN")
-	if cloudFrontDomain == "" {
-		cloudFrontDomain = "media.brunojet.com.br"
-		log.Printf("  WARN: CLOUDFRONT_DOMAIN env not set, using default: %s", cloudFrontDomain)
-	} else {
-		log.Printf("  OK: CLOUDFRONT_DOMAIN from environment: %s", cloudFrontDomain)
-	}
-
-	secretName = os.Getenv("SECRET_NAME")
-	if secretName == "" {
-		secretName = "/go-edge-key-management/rotator" //nolint:gosec // This is an AWS Secrets Manager path, not a credential
-		log.Printf("  WARN: SECRET_NAME env not set, using default: %s", secretName)
-	} else {
-		log.Printf("  OK: SECRET_NAME from environment: %s", secretName)
-	}
+	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", "media.brunojet.com.br")
+	secretName = getEnvOrDefault("SECRET_NAME", "/go-edge-key-management/rotator") //nolint:gosec
 	log.Printf("  ✓ CloudFront signing configured")
 
 	log.Printf("=== Initialization Complete ===")

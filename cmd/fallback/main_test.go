@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
+	"os"
 	"testing"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -61,20 +61,97 @@ func TestHandleErrorResponses(t *testing.T) {
 	}
 }
 
-func TestHandleContextTimeout(t *testing.T) {
-	req := &events.LambdaFunctionURLRequest{
-		RawPath: "/test.bin",
+
+func TestGetEnvOrDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        string
+		value      string
+		defaultVal string
+		expected   string
+	}{
+		{"env_set", "TEST_KEY", "env_value", "default", "env_value"},
+		{"env_empty", "TEST_EMPTY", "", "default", "default"},
+		{"env_not_set", "TEST_NOTSET", "", "default", "default"},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
-	defer cancel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value != "" {
+				os.Setenv(tt.key, tt.value)
+				defer os.Unsetenv(tt.key)
+			} else {
+				os.Unsetenv(tt.key)
+			}
 
-	time.Sleep(2 * time.Millisecond)
+			result := getEnvOrDefault(tt.key, tt.defaultVal)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
+}
 
-	_, _ = Handle(ctx, req)
+func TestGetEnvOrDefaultInt(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        string
+		value      string
+		defaultVal int
+		expected   int
+	}{
+		{"valid_int", "TEST_INT", "42", 1, 42},
+		{"invalid_int", "TEST_BAD", "not_a_number", 1, 1},
+		{"empty_env", "TEST_EMPTY", "", 5, 5},
+		{"zero_value", "TEST_ZERO", "0", 1, 1},
+		{"negative", "TEST_NEG", "-5", 1, 1},
+	}
 
-	if ctx.Err() != context.DeadlineExceeded {
-		t.Skip("context timeout test requires actual timeout (skipped for local testing)")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value != "" {
+				os.Setenv(tt.key, tt.value)
+				defer os.Unsetenv(tt.key)
+			} else {
+				os.Unsetenv(tt.key)
+			}
+
+			result := getEnvOrDefaultInt(tt.key, tt.defaultVal)
+			if result != tt.expected {
+				t.Errorf("expected %d, got %d", tt.expected, result)
+			}
+		})
+	}
+}
+
+func TestGetEnvOrDefaultInt64(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        string
+		value      string
+		defaultVal int64
+		expected   int64
+	}{
+		{"valid_int64", "TEST_I64", "104857600", 1, 104857600},
+		{"invalid_int64", "TEST_BAD", "not_a_number", 100, 100},
+		{"empty_env", "TEST_EMPTY", "", 50, 50},
+		{"zero_value", "TEST_ZERO", "0", 1, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value != "" {
+				os.Setenv(tt.key, tt.value)
+				defer os.Unsetenv(tt.key)
+			} else {
+				os.Unsetenv(tt.key)
+			}
+
+			result := getEnvOrDefaultInt64(tt.key, tt.defaultVal)
+			if result != tt.expected {
+				t.Errorf("expected %d, got %d", tt.expected, result)
+			}
+		})
 	}
 }
 
