@@ -8,13 +8,11 @@ import (
 	"log"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 
-	cdnadapter "github.com/brunojet/go-infra-adapters/v4/pkg/cdn"
-	secretaws "github.com/brunojet/go-infra-adapters/v4/pkg/secret/aws"
+	"github.com/brunojet/go-edge-cache/internal/cdn"
 	storageadapters "github.com/brunojet/go-infra-adapters/v4/pkg/storage/aws/s3"
 	storagecontracts "github.com/brunojet/go-infra-adapters/v4/pkg/storage/contracts"
 )
@@ -134,12 +132,10 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	originBody, contentType, err := fetchFromS3Origin(ctx, path)
 	if err != nil {
 		log.Printf("ERROR Step 1: origin fetch failed - %v", err)
-		// Cache 404 errors for 5 minutes to reduce origin load
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 404,
 			Headers: map[string]string{
-				"Content-Type":  "text/plain",
-				"Cache-Control": "public, max-age=300", // Cache 404 for 5 minutes
+				"Content-Type": "text/plain",
 			},
 			Body:            "Not Found",
 			IsBase64Encoded: false,
@@ -160,12 +156,10 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	err = uploadWithManager(ctx, s3Key, contentType, originBody)
 	if err != nil {
 		log.Printf("ERROR Step 2: Upload failed - %v", err)
-		// Cache 502 errors for 1 minute to reduce origin load during outages
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 502,
 			Headers: map[string]string{
-				"Content-Type":  "text/plain",
-				"Cache-Control": "public, max-age=60", // Cache 502 for 1 minute
+				"Content-Type": "text/plain",
 			},
 			Body:            "Upload failed",
 			IsBase64Encoded: false,
@@ -178,12 +172,10 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	signedURL, err := signRedirectURL(ctx, path, 3600) // Valid for 1 hour
 	if err != nil {
 		log.Printf("WARN: failed to sign URL: %v (returning 200 without cache)", err)
-		// Don't cache signing failures - try again on next request
 		return &events.LambdaFunctionURLResponse{
 			StatusCode: 200,
 			Headers: map[string]string{
-				"Content-Type":  contentType,
-				"Cache-Control": "no-cache, no-store, must-revalidate",
+				"Content-Type": contentType,
 			},
 			Body:            "OK (unsigned)",
 			IsBase64Encoded: false,
@@ -196,8 +188,7 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	return &events.LambdaFunctionURLResponse{
 		StatusCode: 302,
 		Headers: map[string]string{
-			"Location":      signedURL,
-			"Cache-Control": "no-cache, no-store, must-revalidate", // Don't cache 302 redirects
+			"Location": signedURL,
 		},
 		Body:            "",
 		IsBase64Encoded: false,
@@ -263,47 +254,9 @@ func uploadWithManager(ctx context.Context, key, contentType string, body io.Rea
 	return nil
 }
 
-// SecretPayload matches go-edge-key-management structure
-type SecretPayload struct {
-	PrivatePEM  string `json:"private_pem"`
-	Fingerprint string `json:"fingerprint"`
-	PublicKeyID string `json:"public_key_id"`
-}
-
-// signRedirectURL signs a CloudFront URL and returns the full signed URL
+// signRedirectURL signs a CloudFront URL using shared cdn package
 func signRedirectURL(ctx context.Context, path string, expiresIn int64) (string, error) {
-	// Fetch signer from AWS Secrets Manager
-	secretsAPI, err := secretaws.NewSecretAPI(secretaws.WithRegion(awsRegion))
-	if err != nil {
-		return "", fmt.Errorf("failed to create secrets API: %w", err)
-	}
-
-	secretAdapter := secretaws.NewSecrets[SecretPayload](secretsAPI, secretName)
-	payload, err := secretAdapter.GetCurrent(ctx)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch secret: %w", err)
-	}
-
-	if payload == nil {
-		return "", fmt.Errorf("secret not found")
-	}
-
-	// Create signer from secret
-	signer, err := cdnadapter.NewCloudFrontSignerFromPEM(payload.PublicKeyID, []byte(payload.PrivatePEM))
-	if err != nil {
-		return "", fmt.Errorf("failed to create signer: %w", err)
-	}
-
-	// Sign the URL
-	resourceURL := fmt.Sprintf("https://%s%s", cloudFrontDomain, path)
-	expiresAt := time.Now().Add(time.Duration(expiresIn) * time.Second)
-
-	signedURL, err := signer.SignURL(ctx, resourceURL, expiresAt.Unix())
-	if err != nil {
-		return "", fmt.Errorf("failed to sign URL: %w", err)
-	}
-
-	return signedURL, nil
+	return cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, expiresIn)
 }
 
 func main() {
