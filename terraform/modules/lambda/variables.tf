@@ -46,6 +46,12 @@ variable "runtime" {
   default     = "provided.al2"
 }
 
+variable "architecture" {
+  description = "Lambda architecture (x86_64 or arm64). ARM64 is 20% cheaper."
+  type        = string
+  default     = "arm64"
+}
+
 variable "handler" {
   description = "Lambda handler (when using Zip)"
   type        = string
