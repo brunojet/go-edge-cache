@@ -224,6 +224,6 @@ terraform apply -var=bucket_name=something -var-file=../env/dev/terraform.tfvars
 
 ## See Also
 
-- [LAMBDA_DEPLOYMENT.md](../LAMBDA_DEPLOYMENT.md) - Lambda deployment workflow
-- [LAMBDA_ACTIVATION.md](../LAMBDA_ACTIVATION.md) - Lambda activation troubleshooting
+- [docs/deployment-lambda.md](../docs/deployment-lambda.md) - Lambda deployment workflow
+- [docs/lambda-activation.md](../docs/lambda-activation.md) - Lambda activation troubleshooting
 - `terraform/variables.tf` - All available variables
