@@ -22,8 +22,8 @@ resource "aws_iam_role" "this" {
 resource "aws_iam_role_policy" "inline" {
   count = var.create && var.inline_policy != "" ? 1 : 0
 
-  name = "${var.name}-inline"
-  role = aws_iam_role.this[0].name
+  name   = "${var.name}-inline"
+  role   = aws_iam_role.this[0].name
   policy = var.inline_policy
 }
 

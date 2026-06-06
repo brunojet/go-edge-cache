@@ -27,18 +27,18 @@ locals {
 module "media_proxy" {
   source = "./modules/media_proxy"
 
-  bucket_name                 = var.bucket_name
-  lambda_origin_domain        = var.enable_lambda ? trimsuffix(trimprefix(module.lambda.function_url, "https://"), "/") : var.lambda_origin_domain
-  lambda_function_arn         = local.lambda_function_arn
-  cloudfront_price_class      = var.cloudfront_price_class
-  s3_cdn_path                 = var.s3_cdn_path
-  s3_cache_cleanup_days       = var.s3_cache_cleanup_days
-  tags                        = var.tags
-  aliases                     = var.aliases
-  acm_certificate_arn         = var.acm_certificate_arn
-  enable_signed_urls          = var.enable_signed_urls
-  signed_urls_public_key_pem  = var.signed_urls_public_key_pem
-  signed_urls_public_key_name = var.signed_urls_public_key_name
-  signed_urls_key_group_name  = var.signed_urls_key_group_name
+  bucket_name                      = var.bucket_name
+  lambda_origin_domain             = var.enable_lambda ? trimsuffix(trimprefix(module.lambda.function_url, "https://"), "/") : var.lambda_origin_domain
+  lambda_function_arn              = local.lambda_function_arn
+  cloudfront_price_class           = var.cloudfront_price_class
+  s3_cdn_path                      = var.s3_cdn_path
+  s3_cache_cleanup_days            = var.s3_cache_cleanup_days
+  tags                             = var.tags
+  aliases                          = var.aliases
+  acm_certificate_arn              = var.acm_certificate_arn
+  enable_signed_urls               = var.enable_signed_urls
+  signed_urls_public_key_pem       = var.signed_urls_public_key_pem
+  signed_urls_public_key_name      = var.signed_urls_public_key_name
+  signed_urls_key_group_name       = var.signed_urls_key_group_name
   existing_cloudfront_key_group_id = var.existing_cloudfront_key_group_id
 }

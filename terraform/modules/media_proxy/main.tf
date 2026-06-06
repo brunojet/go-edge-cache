@@ -239,12 +239,12 @@ resource "aws_cloudfront_distribution" "media" {
   #   504 →  60s  timeout do ServiceNow; origin lenta, não adianta retry imediato
   dynamic "custom_error_response" {
     for_each = [
-      { code = 403, ttl = 60  },
+      { code = 403, ttl = 60 },
       { code = 404, ttl = 300 },
-      { code = 500, ttl = 10  },
-      { code = 502, ttl = 30  },
-      { code = 503, ttl = 10  },
-      { code = 504, ttl = 60  },
+      { code = 500, ttl = 10 },
+      { code = 502, ttl = 30 },
+      { code = 503, ttl = 10 },
+      { code = 504, ttl = 60 },
     ]
     content {
       error_code            = custom_error_response.value.code
