@@ -2,6 +2,12 @@
 
 Índice da documentação operacional e de design do projeto.
 
+## Arquitetura
+
+| Doc | Descrição |
+|---|---|
+| [architecture.md](architecture.md) | Visão geral, diagrama de componentes e de sequência (Mermaid), ciclo de vida do objeto |
+
 ## Deploy & infraestrutura
 
 | Doc | Descrição |
@@ -28,9 +34,10 @@
 
 ## Design / contexto
 
-Material de arquitetura e diretrizes em [`../context-docs/`](../context-docs/):
+A arquitetura corrente (com diagramas Mermaid) está em [architecture.md](architecture.md).
+Material de design original e diretrizes em [`../context-docs/`](../context-docs/):
 
-- [Arquitetura — CloudFront Media Proxy](../context-docs/arquitetura-cloudfront-media-proxy.docx.md)
+- [Arquitetura — CloudFront Media Proxy (documento base)](../context-docs/arquitetura-cloudfront-media-proxy.docx.md)
 - [Diretrizes de GC e complexidade](../context-docs/GC_GUIDELINES.md)
 
 ## READMEs co-localizados
