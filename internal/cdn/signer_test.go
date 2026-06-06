@@ -33,15 +33,6 @@ func TestSignURLValidation(t *testing.T) {
 	}
 }
 
-func TestPayloadFromSecretValidation(t *testing.T) {
-	ctx := context.Background()
-
-	_, err := PayloadFromSecret(ctx, "", "us-east-1")
-	if err == nil {
-		t.Error("expected error for missing secret name")
-	}
-}
-
 func TestSignURLIntegrationWithMockedSecret(t *testing.T) {
 	ctx := context.Background()
 

@@ -175,6 +175,35 @@ resource "aws_cloudfront_distribution" "media" {
     trusted_key_groups = var.enable_signed_urls && local.signed_url_key_group_id != "" ? [local.signed_url_key_group_id] : []
   }
 
+  # Error response caching: 4xx (60s), 5xx (30s)
+  # Note: 302 redirects are NOT cached by CloudFront by default (no config needed)
+
+  # 4xx Client Errors: Cache 60 seconds
+  dynamic "custom_error_response" {
+    for_each = [
+      { code = 403, ttl = 60 },
+      { code = 404, ttl = 60 },
+    ]
+    content {
+      error_code            = custom_error_response.value.code
+      error_caching_min_ttl = custom_error_response.value.ttl
+    }
+  }
+
+  # 5xx Server Errors: Cache 30 seconds
+  dynamic "custom_error_response" {
+    for_each = [
+      { code = 500, ttl = 30 },
+      { code = 502, ttl = 30 },
+      { code = 503, ttl = 30 },
+      { code = 504, ttl = 30 },
+    ]
+    content {
+      error_code            = custom_error_response.value.code
+      error_caching_min_ttl = custom_error_response.value.ttl
+    }
+  }
+
   restrictions {
     geo_restriction {
       restriction_type = "none"

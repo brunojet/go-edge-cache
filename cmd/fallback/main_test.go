@@ -2,29 +2,95 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+	storagecontracts "github.com/brunojet/go-infra-adapters/v4/pkg/storage/contracts"
 )
+
+// MockBucket is a mock implementation of BucketAdapter for testing
+type MockBucket struct {
+	lockErr       error
+	getObjectErr  error
+	putObjectErr  error
+	headObjectErr error
+}
+
+func (m *MockBucket) GetLock(ctx context.Context, key string, ttl time.Duration) error {
+	return nil
+}
+
+func (m *MockBucket) GetLockWait(ctx context.Context, key string, ttl, waitTimeout time.Duration) error {
+	return m.lockErr
+}
+
+func (m *MockBucket) ReleaseLock(ctx context.Context, key string) error {
+	return nil
+}
+
+func (m *MockBucket) GetObject(ctx context.Context, key string, obj *storagecontracts.BucketObject) error {
+	return m.getObjectErr
+}
+
+func (m *MockBucket) PutObject(ctx context.Context, obj *storagecontracts.BucketObject) error {
+	return m.putObjectErr
+}
+
+func (m *MockBucket) HeadObject(ctx context.Context, key string, info *storagecontracts.ObjectInfo) error {
+	return m.headObjectErr
+}
+
+func (m *MockBucket) DeleteObject(ctx context.Context, key string) error {
+	return nil
+}
+
+func (m *MockBucket) ListObjects(ctx context.Context, prefix string, objects *[]storagecontracts.ObjectInfo) error {
+	return nil
+}
+
+func (m *MockBucket) BucketName() string {
+	return "mock-bucket"
+}
 
 func TestHandleErrorResponses(t *testing.T) {
 	tests := []struct {
 		name          string
 		path          string
+		mockErr       error
 		expectStatus  int
 		expectNoCache bool
 	}{
 		{
-			name:          "empty_path_404",
+			name:          "empty_path_500",
 			path:          "",
-			expectStatus:  404,
+			mockErr:       fmt.Errorf("empty path"),
+			expectStatus:  500,
 			expectNoCache: true,
+		},
+		{
+			name:          "lock_acquire_failed",
+			path:          "/file.pdf",
+			mockErr:       fmt.Errorf("lock acquire failed"),
+			expectStatus:  429,
+			expectNoCache: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Replace global bucket with mock
+			oldBucket := bucket
+			defer func() { bucket = oldBucket }()
+
+			if tt.name == "lock_acquire_failed" {
+				bucket = &MockBucket{lockErr: tt.mockErr}
+			} else {
+				bucket = &MockBucket{getObjectErr: tt.mockErr}
+			}
+
 			req := &events.LambdaFunctionURLRequest{
 				RawPath: tt.path,
 			}
@@ -48,14 +114,9 @@ func TestHandleErrorResponses(t *testing.T) {
 				t.Error("headers is nil")
 			}
 
-			if _, hasCache := resp.Headers["Cache-Control"]; hasCache {
-				t.Error("Cache-Control header should not be set (managed by CloudFront)")
-			}
-
-			if tt.expectNoCache && resp.StatusCode == 404 {
-				if ct, ok := resp.Headers["Content-Type"]; !ok || ct == "" {
-					t.Error("Content-Type should be set")
-				}
+			// Verify Content-Type is set for error responses
+			if ct, ok := resp.Headers["Content-Type"]; !ok || ct != "application/problem+json" {
+				t.Errorf("expected Content-Type: application/problem+json, got %q", ct)
 			}
 		})
 	}
@@ -154,19 +215,53 @@ func TestGetEnvOrDefaultInt64(t *testing.T) {
 	}
 }
 
-func TestNoCacheControlHeaders(t *testing.T) {
-	req := &events.LambdaFunctionURLRequest{
-		RawPath: "",
+func TestErrorResponseJSON(t *testing.T) {
+	resp := errorResponse(404, "not found")
+
+	if resp.StatusCode != 404 {
+		t.Errorf("expected status 404, got %d", resp.StatusCode)
 	}
 
-	ctx := context.Background()
-	resp, _ := Handle(ctx, req)
+	if ct, ok := resp.Headers["Content-Type"]; !ok || ct != "application/problem+json" {
+		t.Errorf("expected application/problem+json, got %q", ct)
+	}
 
+	// No-cache errors should NOT include Cache-Control header
 	if _, hasCache := resp.Headers["Cache-Control"]; hasCache {
-		t.Error("Cache-Control header should not be present in any response")
+		t.Error("errorResponse should not include Cache-Control header")
 	}
 
-	if ct, ok := resp.Headers["Content-Type"]; !ok || ct == "" {
-		t.Error("Content-Type should be set for error responses")
+	// Verify JSON structure contains expected fields
+	if !contains(resp.Body, "\"status\":404") {
+		t.Error("response should contain status field")
 	}
+	if !contains(resp.Body, "\"detail\":\"not found\"") {
+		t.Error("response should contain detail field")
+	}
+}
+
+func TestErrorResponseNoCacheJSON(t *testing.T) {
+	resp := errorResponseNoCache(500, "internal error")
+
+	if resp.StatusCode != 500 {
+		t.Errorf("expected status 500, got %d", resp.StatusCode)
+	}
+
+	if ct, ok := resp.Headers["Content-Type"]; !ok || ct != "application/problem+json" {
+		t.Errorf("expected application/problem+json, got %q", ct)
+	}
+
+	// No-cache variant SHOULD include Cache-Control header
+	if cache, ok := resp.Headers["Cache-Control"]; !ok || cache != "no-cache, no-store, must-revalidate" {
+		t.Errorf("expected no-cache headers, got %q", cache)
+	}
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

@@ -5,6 +5,7 @@ resource "aws_lambda_function" "zip" {
   role          = var.role_arn
   handler       = var.handler
   runtime       = var.runtime
+  architectures = [var.architecture]
 
   # Use filename if provided, otherwise fall back to S3 (for backward compatibility)
   filename         = var.filename != "" ? var.filename : null
@@ -30,6 +31,7 @@ resource "aws_lambda_function" "image" {
   role          = var.role_arn
   package_type  = "Image"
   image_uri     = var.image_uri
+  architectures = [var.architecture]
 
   memory_size = var.memory_size
   timeout     = var.timeout

@@ -1,5 +1,9 @@
 // Lambda function and optional Function URL (refactored to reusable module)
 
+locals {
+  lambda_zip_path = "${path.module}/../build/fallback.zip"
+}
+
 module "lambda" {
 	source                   = "./modules/lambda"
 	create                   = var.enable_lambda

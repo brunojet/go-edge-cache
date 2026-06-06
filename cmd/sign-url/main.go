@@ -9,8 +9,41 @@ import (
 	"strings"
 	"time"
 
-	"github.com/brunojet/go-edge-cache/internal/cdn"
+	cdnadapter "github.com/brunojet/go-infra-adapters/v4/pkg/cdn"
+	secretaws "github.com/brunojet/go-infra-adapters/v4/pkg/secret/aws"
 )
+
+// SecretPayload matches go-edge-key-management structure
+type SecretPayload struct {
+	PrivatePEM   string `json:"private_pem"`
+	PublicPEM    string `json:"public_pem"`
+	Fingerprint  string `json:"fingerprint"`
+	CreatedAt    string `json:"created_at"`
+	KeyGroupName string `json:"key_group_name"`
+	NamePrefix   string `json:"name_prefix"`
+	PublicKeyID  string `json:"public_key_id"`
+}
+
+// FetchSecretPayload retrieves credentials from AWS Secrets Manager
+func FetchSecretPayload(ctx context.Context, secretName string) (*SecretPayload, error) {
+	secretsAPI, err := secretaws.NewSecretAPI(secretaws.WithRegion("us-east-1"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create secrets API: %w", err)
+	}
+
+	secretAdapter := secretaws.NewSecrets[SecretPayload](secretsAPI, secretName)
+
+	payload, err := secretAdapter.GetCurrent(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get secret: %w", err)
+	}
+
+	if payload == nil {
+		return nil, fmt.Errorf("secret not found")
+	}
+
+	return payload, nil
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -21,8 +54,8 @@ func main() {
 
 func run() error {
 	domainName := flag.String("domain", "media.brunojet.com.br", "CloudFront domain name")
-	urlPath := flag.String("path", "/servicenow-zurich-platform-security-ptbr.pdf", "URL path on CloudFront (e.g., /images/photo.jpg)")
-	expiresIn := flag.Int64("expires", 3600, "Expiration time in seconds from now")
+	urlPath := flag.String("path", "/image/cyril-mzn-WSvth_lwCi0-unsplash.jpg", "URL path on CloudFront (e.g., /images/photo.jpg)")
+	expiresIn := flag.Int64("expires", 86400, "Expiration time in seconds from now")
 	secretName := flag.String("secret", "/go-edge-key-management/rotator", "AWS Secrets Manager secret name")
 
 	flag.Parse()
@@ -36,18 +69,32 @@ func run() error {
 		*urlPath = strings.TrimPrefix(*urlPath, "C:/Program Files/Git")
 	}
 
+	// Fetch credentials from AWS Secrets Manager
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	fmt.Fprintf(os.Stderr, "Fetching credentials from secret: %s\n", *secretName)
-	payload, err := cdn.PayloadFromSecret(ctx, *secretName, "us-east-1")
+	payload, err := FetchSecretPayload(ctx, *secretName)
 	if err != nil {
 		return fmt.Errorf("failed to fetch secret: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "✓ Secret fetched. Public Key ID: %s\n\n", payload.PublicKeyID)
 
-	signedURL, err := cdn.SignURL(ctx, *domainName, *urlPath, *secretName, "us-east-1", *expiresIn)
+	// Create signer from secret's private key using go-infra-adapters
+	signer, err := cdnadapter.NewCloudFrontSignerFromPEM(payload.PublicKeyID, []byte(payload.PrivatePEM))
+	if err != nil {
+		return fmt.Errorf("failed to create signer: %w", err)
+	}
+
+	// Build resource URL with /cdn prefix (S3 origin path)
+	resourceURL := fmt.Sprintf("https://%s%s", *domainName, *urlPath)
+
+	// Calculate expiration time
+	expiresAt := time.Now().Add(time.Duration(*expiresIn) * time.Second)
+
+	// Sign the URL
+	signedURL, err := signer.SignURL(ctx, resourceURL, expiresAt.Unix())
 	if err != nil {
 		return fmt.Errorf("failed to sign URL: %w", err)
 	}

@@ -5,8 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/build"
 mkdir -p "$OUT"
 
-echo "Building $APPNAME (linux)"
-GOOS=linux GOARCH=amd64 go build -o "$OUT/$APPNAME" ./cmd/$APPNAME
+echo "Building $APPNAME (linux/arm64 - cost optimized)"
+GOOS=linux GOARCH=arm64 go build -o "$OUT/$APPNAME" ./cmd/$APPNAME
 pushd "$OUT" > /dev/null
 
 # When creating the package we want only a single executable named 'bootstrap' inside the zip
