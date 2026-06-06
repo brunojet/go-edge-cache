@@ -2,10 +2,16 @@
 
 CloudFront Media Proxy com cache em S3 e fallback via Lambda (Go). Serve mídia
 imutável (identificada por `sysid`) por uma CDN com signed URLs. No cache miss,
-uma Lambda busca o arquivo na origem, grava em `/cdn/` e redireciona o cliente
+uma Lambda busca o artefato na origem, grava em `/cdn/` e redireciona o cliente
 para a URL assinada.
 
 > Diagramas em [Mermaid](https://mermaid.js.org/) — renderizam direto no GitHub.
+
+> **Origem:** no mundo real a origem é a **API do ServiceNow**, que fornece os
+> artefatos para download. Na PoC atual ela é simulada por um bucket S3 (download
+> bucket-to-bucket). Diferenças relevantes estão anotadas nos diagramas — em
+> especial, a API do ServiceNow **não** expõe `HEAD`, então a guarda de existência
+> (404) e tamanho (413) feita hoje via `HeadObject` é específica da PoC.
 
 ## Componentes
 
@@ -16,14 +22,14 @@ flowchart LR
     OG{{"Origin Group<br/>S3 primary / Lambda failover"}}
     S3C[("S3 /cdn/<br/>cache + Intelligent-Tiering")]
     L["Lambda fallback<br/>Go provided.al2 arm64"]
-    S3O[("S3 root<br/>origin proxy ServiceNow")]
+    SN["ServiceNow API<br/>origem dos artefatos<br/>(PoC: bucket S3 stand-in)"]
     SM["Secrets Manager<br/>chave de assinatura"]
 
     Client -->|"GET signed URL"| CF
     CF --> OG
     OG -->|"primary"| S3C
     OG -.->|"failover 403/404/5xx"| L
-    L -->|"lock + Head/Get"| S3O
+    L -->|"download artefato"| SN
     L -->|"upload streaming"| S3C
     L -->|"fetch key"| SM
     L -.->|"302 -> signed URL"| Client
@@ -35,7 +41,7 @@ flowchart LR
 | **Origin Group** | S3 como origem primária; failover para a Lambda nos status `403, 404, 500, 502, 503, 504`. |
 | **S3 `/cdn/`** | Cache de objetos servidos. Intelligent-Tiering + expiração de 365 dias. |
 | **Lambda fallback** | Em cache miss: lock distribuído → valida origem → download → upload streaming → 302. |
-| **S3 root** | Proxy da origem (ServiceNow). Lido só pela Lambda no fallback. |
+| **ServiceNow API** | Origem real dos artefatos (download). **PoC:** simulada por um bucket S3 lido bucket-to-bucket. Sem `HEAD` e sem Range — download all-or-nothing. |
 | **Secrets Manager** | Chave privada de assinatura (rotacionada por `go-edge-key-management`). |
 
 ## Fluxo de requisição (sequência)
@@ -47,7 +53,7 @@ sequenceDiagram
     participant CF as CloudFront
     participant S3C as S3 /cdn (cache)
     participant L as Lambda fallback
-    participant S3O as S3 root (origem)
+    participant SN as ServiceNow API (origem)
     participant SM as Secrets Manager
 
     C->>CF: GET /images/{sysid} (signed URL)
@@ -67,19 +73,20 @@ sequenceDiagram
         alt já populado por requisição concorrente
             S3C-->>L: 200
         else precisa buscar na origem
-            L->>S3O: HeadObject /{path} (checkOrigin)
+            Note over L,SN: checkOrigin: PoC usa HeadObject (S3) p/ guarda 404/413.<br/>ServiceNow API não tem HEAD — em prod validar pela resposta do download.
+            L->>SN: checkOrigin (existência + tamanho)
             alt não existe
-                S3O-->>L: 404
+                SN-->>L: 404
                 L-->>CF: 404
                 CF-->>C: 404 (cacheado 300s)
             else excede MAX_FILE_SIZE_MB (256)
-                S3O-->>L: 200 metadata
+                SN-->>L: 200 metadata
                 L-->>CF: 413
                 CF-->>C: 413
             else ok
-                S3O-->>L: 200 metadata
-                L->>S3O: GetObject /{path}
-                S3O-->>L: stream do corpo
+                SN-->>L: 200 metadata
+                L->>SN: download do artefato (GET)
+                SN-->>L: stream do corpo
                 L->>S3C: PutObject /cdn/{path} (streaming)
             end
         end
@@ -103,8 +110,10 @@ sequenceDiagram
   concorrentes pelo mesmo `path`, evitando downloads duplicados da origem.
 - O `isCached` dentro da Lambda cobre a corrida em que outra invocação populou
   `/cdn/` enquanto esta esperava o lock.
-- `checkOrigin` faz um `HeadObject` único que serve de **dupla guarda**: 404
-  (não existe) e 413 (maior que o limite) — evitando um `GetObject` desperdiçado.
+- `checkOrigin` é a **dupla guarda** da origem: 404 (não existe) e 413 (maior que
+  o limite). Na PoC isso é um `HeadObject` único no S3, evitando um `GetObject`
+  desperdiçado. Como a **API do ServiceNow não tem `HEAD`**, em produção essa
+  validação passa a vir dos headers/metadata da própria resposta de download.
 - A Lambda **não devolve o corpo**: retorna `302` para a signed URL. O cliente
   re-requisita e aí o objeto já está em `/cdn/`, servido pelo S3.
 - `ReleaseLock` usa `context.Background()` fresco (o ctx da invocação pode estar
