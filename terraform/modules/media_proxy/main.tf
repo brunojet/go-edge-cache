@@ -227,28 +227,24 @@ resource "aws_cloudfront_distribution" "media" {
     trusted_key_groups = var.enable_signed_urls && local.signed_url_key_group_id != "" ? [local.signed_url_key_group_id] : []
   }
 
-  # Error response caching: 4xx (60s), 5xx (30s)
-  # Note: 302 redirects are NOT cached by CloudFront by default (no config needed)
-
-  # 4xx Client Errors: Cache 60 seconds
+  # Error response caching — per-code TTLs tuned to the failure semantics.
+  # 302 redirects are NOT cached by CloudFront by default (no config needed).
+  #
+  # Rationale:
+  #   404 → 300s  arquivo não existe no ServiceNow; improvável que apareça em 5min
+  #   403 →  60s  problema de auth temporário; pode resolver após rotação de chave
+  #   500 →  10s  erro interno do ServiceNow; retry rápido pode resolver
+  #   502 →  30s  problema de conectividade; dar algum tempo para recuperar
+  #   503 →  10s  ServiceNow sobrecarregado; retry rápido faz sentido
+  #   504 →  60s  timeout do ServiceNow; origin lenta, não adianta retry imediato
   dynamic "custom_error_response" {
     for_each = [
-      { code = 403, ttl = 60 },
-      { code = 404, ttl = 60 },
-    ]
-    content {
-      error_code            = custom_error_response.value.code
-      error_caching_min_ttl = custom_error_response.value.ttl
-    }
-  }
-
-  # 5xx Server Errors: Cache 30 seconds
-  dynamic "custom_error_response" {
-    for_each = [
-      { code = 500, ttl = 30 },
-      { code = 502, ttl = 30 },
-      { code = 503, ttl = 30 },
-      { code = 504, ttl = 30 },
+      { code = 403, ttl = 60  },
+      { code = 404, ttl = 300 },
+      { code = 500, ttl = 10  },
+      { code = 502, ttl = 30  },
+      { code = 503, ttl = 10  },
+      { code = 504, ttl = 60  },
     ]
     content {
       error_code            = custom_error_response.value.code
