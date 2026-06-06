@@ -278,11 +278,10 @@ resource "aws_cloudfront_distribution" "media" {
 
   # lifecycle ignore_changes removed: upgrading provider to v6 to fix behavior
 
-  # Tags para controle de custos
+  # Tags para controle de custos. Environment/Project vêm de var.tags (tfvars),
+  # então não são hardcoded — só o CostCenter específico deste recurso.
   tags = merge(var.tags, {
-    CostCenter  = "media-proxy"
-    Environment = "production"
-    Project     = "go-edge-cache"
+    CostCenter = "media-proxy"
   })
 }
 
