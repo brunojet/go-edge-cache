@@ -66,13 +66,14 @@ resource "aws_cloudwatch_log_group" "lambda" {
   tags              = var.tags
 }
 
+locals {
+  lambda = var.create ? try(aws_lambda_function.zip[0], aws_lambda_function.image[0]) : null
+}
+
 resource "aws_lambda_function_url" "this" {
   count = var.create && var.create_function_url ? 1 : 0
 
-  function_name      = var.create ? try(aws_lambda_function.zip[0].function_name, aws_lambda_function.image[0].function_name) : ""
+  # count já garante var.create == true aqui, então local.lambda nunca é null.
+  function_name      = local.lambda.function_name
   authorization_type = var.function_url_auth_type
-}
-
-locals {
-  lambda = var.create ? try(aws_lambda_function.zip[0], aws_lambda_function.image[0]) : null
 }

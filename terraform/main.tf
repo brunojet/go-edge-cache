@@ -28,7 +28,7 @@ module "media_proxy" {
   source = "./modules/media_proxy"
 
   bucket_name                 = var.bucket_name
-  lambda_origin_domain        = var.enable_lambda ? replace(replace(module.lambda.function_url, "https://", ""), "/", "") : var.lambda_origin_domain
+  lambda_origin_domain        = var.enable_lambda ? trimsuffix(trimprefix(module.lambda.function_url, "https://"), "/") : var.lambda_origin_domain
   lambda_function_arn         = local.lambda_function_arn
   cloudfront_price_class      = var.cloudfront_price_class
   s3_cdn_path                 = var.s3_cdn_path

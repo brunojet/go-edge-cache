@@ -5,8 +5,8 @@ data "aws_caller_identity" "current" {}
 
 locals {
   has_lambda_origin = var.lambda_origin_domain != null && var.lambda_origin_domain != ""
-  # Determine which key group to use for signed URLs
-  signed_url_key_group_id = var.existing_cloudfront_key_group_id != "" ? var.existing_cloudfront_key_group_id : (length(aws_cloudfront_key_group.signed) > 0 ? aws_cloudfront_key_group.signed[0].id : "")
+  # Key group para signed URLs: usa o existente ou o criado (try() trata count=0).
+  signed_url_key_group_id = var.existing_cloudfront_key_group_id != "" ? var.existing_cloudfront_key_group_id : try(aws_cloudfront_key_group.signed[0].id, "")
 }
 
 resource "aws_s3_bucket" "media" {
@@ -200,7 +200,7 @@ resource "aws_cloudfront_distribution" "media" {
     content {
       domain_name              = var.lambda_origin_domain
       origin_id                = "lambda-origin"
-      origin_access_control_id = length(aws_cloudfront_origin_access_control.lambda_oac) > 0 ? aws_cloudfront_origin_access_control.lambda_oac[0].id : null
+      origin_access_control_id = try(aws_cloudfront_origin_access_control.lambda_oac[0].id, null)
 
       custom_origin_config {
         http_port              = 80
@@ -258,22 +258,13 @@ resource "aws_cloudfront_distribution" "media" {
     }
   }
 
-  # Viewer certificate: use ACM when provided, otherwise CloudFront default
-  dynamic "viewer_certificate" {
-    for_each = var.acm_certificate_arn == "" ? [1] : []
-    content {
-      cloudfront_default_certificate = true
-    }
-  }
-
-  dynamic "viewer_certificate" {
-    for_each = var.acm_certificate_arn != "" ? [var.acm_certificate_arn] : []
-    content {
-      acm_certificate_arn            = viewer_certificate.value
-      ssl_support_method             = "sni-only"
-      minimum_protocol_version       = "TLSv1.2_2021"
-      cloudfront_default_certificate = false
-    }
+  # Viewer certificate: ACM quando fornecido, senão o certificado default do CloudFront.
+  # Atributos do ACM ficam null no modo default (equivalente a não setá-los).
+  viewer_certificate {
+    cloudfront_default_certificate = var.acm_certificate_arn == ""
+    acm_certificate_arn            = var.acm_certificate_arn != "" ? var.acm_certificate_arn : null
+    ssl_support_method             = var.acm_certificate_arn != "" ? "sni-only" : null
+    minimum_protocol_version       = var.acm_certificate_arn != "" ? "TLSv1.2_2021" : null
   }
 
   # lifecycle ignore_changes removed: upgrading provider to v6 to fix behavior
@@ -300,7 +291,8 @@ resource "aws_cloudfront_public_key" "signed" {
 }
 
 resource "aws_cloudfront_key_group" "signed" {
-  count = length(aws_cloudfront_public_key.signed) > 0 ? 1 : 0
+  # Mesma condição do public key — ambos existem juntos.
+  count = var.signed_urls_public_key_pem != "" ? 1 : 0
 
   name  = var.signed_urls_key_group_name != "" ? var.signed_urls_key_group_name : "${var.bucket_name}-cf-keygroup"
   items = [for k in aws_cloudfront_public_key.signed : k.id]

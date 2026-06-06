@@ -7,7 +7,7 @@ locals {
 module "lambda" {
 	source                   = "./modules/lambda"
 	create                   = var.enable_lambda
-	function_name            = var.lambda_function_name != "" ? var.lambda_function_name : "${var.bucket_name}-origin-lambda"
+	function_name            = local.lambda_function_name
 	package_type             = var.lambda_package_type
 	file_name                 = local.lambda_zip_path
 	image_uri                = var.lambda_image_uri
