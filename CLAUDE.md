@@ -33,3 +33,11 @@ Usar **Conventional Commits** (padrão SemVer, ecossistema Go):
 - Sem ponto final no subject
 - Corpo só quando o "porquê" não é óbvio; explica motivação, não o "como"
 - Um commit = uma mudança lógica coesa
+
+## Workflow de branches e PRs
+
+- Criar branches **a partir de `develop`**.
+- Abrir PRs **para `develop`** (nunca direto para `main`).
+- **Merge de PR sem squash** — preservar os commits individuais (merge commit ou
+  fast-forward). Não usar squash merge.
+- `main` recebe apenas merges de `develop`.
