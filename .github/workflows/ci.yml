@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.4
+          args: --timeout=5m ./...
+
+      - name: Validate test coverage (internal packages only)
+        shell: bash
+        run: |
+          mkdir -p coverage
+          go test -coverprofile=coverage/coverage.out ./internal/...
+          total=$(go tool cover -func=coverage/coverage.out | awk '/^total:/ {print $NF}' | sed 's/%//')
+          min=15
+          echo "Internal packages coverage: ${total}%"
+          if (( $(echo "$total < $min" | bc -l) )); then
+            echo "ERROR: coverage ${total}% below minimum ${min}%"
+            exit 1
+          fi
+          echo "✓ Coverage ${total}% >= ${min}%"
