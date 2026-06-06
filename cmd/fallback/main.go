@@ -227,7 +227,7 @@ func handleResponse(ctx context.Context, mode, path, contentType string) (*event
 	signedURL, err := cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, urlSignatureTTL)
 	if err != nil {
 		detail := fmt.Sprintf("URL signing failed for %s file %s: %v", mode, path, err)
-		return errorResponse(http.StatusInternalServerError, detail), nil
+		return errorResponseNoCache(http.StatusInternalServerError, detail), nil
 	}
 	log.Printf("signed redirect (%s): %s", mode, signedURL)
 	return redirectResponse(signedURL), nil
@@ -245,8 +245,7 @@ func redirectResponse(signedURL string) *events.LambdaFunctionURLResponse {
 	}
 }
 
-// errorResponse returns RFC 7807 Problem Details JSON response
-func errorResponse(statusCode int, detail string) *events.LambdaFunctionURLResponse {
+func errorResponseInternal(statusCode int, detail string, ignoreCache bool) *events.LambdaFunctionURLResponse {
 	log.Printf("ERROR: %d - %s", statusCode, detail)
 
 	problem := ProblemDetail{
@@ -257,16 +256,26 @@ func errorResponse(statusCode int, detail string) *events.LambdaFunctionURLRespo
 	}
 
 	body, _ := json.Marshal(problem)
+	headers := map[string]string{"Content-Type": "application/problem+json"}
+	if ignoreCache {
+		headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+	}
 
 	return &events.LambdaFunctionURLResponse{
-		StatusCode: statusCode,
-		Headers: map[string]string{
-			"Content-Type":  "application/problem+json",
-			"Cache-Control": "no-cache, no-store, must-revalidate",
-		},
+		StatusCode:      statusCode,
+		Headers:         headers,
 		Body:            string(body),
 		IsBase64Encoded: false,
 	}
+}
+
+// errorResponse returns RFC 7807 Problem Details JSON response
+func errorResponse(statusCode int, detail string) *events.LambdaFunctionURLResponse {
+	return errorResponseInternal(statusCode, detail, false)
+}
+
+func errorResponseNoCache(statusCode int, detail string) *events.LambdaFunctionURLResponse {
+	return errorResponseInternal(statusCode, detail, true)
 }
 
 func main() {
