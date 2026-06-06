@@ -35,7 +35,6 @@ const (
 )
 
 var (
-	storageAPI       storagecontracts.StorageAPI
 	bucket           storagecontracts.BucketAdapter
 	s3BucketName     string
 	awsRegion        string
@@ -249,7 +248,7 @@ func errorResponseInternal(statusCode int, detail string, ignoreCache bool) *eve
 	log.Printf("ERROR: %d - %s", statusCode, detail)
 
 	problem := ProblemDetail{
-		Type:   fmt.Sprintf("about:blank"), // Standard when no specific type
+		Type:   "about:blank", // Standard when no specific type
 		Title:  http.StatusText(statusCode),
 		Status: statusCode,
 		Detail: detail,
