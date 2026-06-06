@@ -19,7 +19,7 @@ Cliente → CloudFront ──(hit)──→ S3 /cdn/{sysid}
                                         └── 302 → signed URL
 ```
 
-Detalhes completos em [`context-docs/arquitetura-cloudfront-media-proxy.docx.md`](context-docs/arquitetura-cloudfront-media-proxy.docx.md).
+Diagramas (componentes, sequência, ciclo de vida) em [`docs/architecture.md`](docs/architecture.md).
 
 ## Estrutura do repositório
 
@@ -59,6 +59,7 @@ terraform fmt -recursive
 
 Veja o índice completo em [`docs/README.md`](docs/README.md). Atalhos:
 
+- [Arquitetura (diagramas)](docs/architecture.md)
 - [Deploy com Terraform](docs/deployment-terraform.md)
 - [Build & deploy da Lambda](docs/deployment-lambda.md)
 - [Desenvolvimento local](docs/local-development.md)
