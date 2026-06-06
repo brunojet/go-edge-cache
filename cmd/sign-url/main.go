@@ -54,7 +54,7 @@ func main() {
 
 func run() error {
 	domainName := flag.String("domain", "media.brunojet.com.br", "CloudFront domain name")
-	urlPath := flag.String("path", "/image/cyril-mzn-WSvth_lwCi0-unsplash.jpg", "URL path on CloudFront (e.g., /images/photo.jpg)")
+	urlPath := flag.String("path", "/images/samuele-errico-piccarini-MCroQe9ykmM-unsplash.jpg", "URL path on CloudFront (e.g., /images/photo.jpg)")
 	expiresIn := flag.Int64("expires", 86400, "Expiration time in seconds from now")
 	secretName := flag.String("secret", "/go-edge-key-management/rotator", "AWS Secrets Manager secret name")
 

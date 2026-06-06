@@ -13,15 +13,16 @@ import (
 // domain: CloudFront domain (e.g., "media.example.com")
 // path: URL path (e.g., "/file.pdf")
 // expiresInSeconds: signature valid duration
-func SignURL(ctx context.Context, domain, path, secretName, region string, expiresInSeconds int64) (string, error) {
+// Region is resolved automatically from the AWS_REGION env var (set by Lambda runtime).
+func SignURL(ctx context.Context, domain, path, secretName string, expiresInSeconds int64) (string, error) {
 	if domain == "" {
 		return "", fmt.Errorf("domain required")
 	}
 	if path == "" {
 		return "", fmt.Errorf("path required")
 	}
-	// Fetch signing credentials
-	payload, err := secrets.FetchPayload(ctx, secretName, region)
+	// Fetch signing credentials — region auto-resolved by AWS SDK from AWS_REGION env var
+	payload, err := secrets.FetchPayload(ctx, secretName)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch secret: %w", err)
 	}

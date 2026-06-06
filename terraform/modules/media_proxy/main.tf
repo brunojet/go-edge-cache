@@ -44,21 +44,47 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "media" {
   }
 }
 
-# S3 Lifecycle: cleanup old cached objects
+# S3 Lifecycle: Intelligent-Tiering + DELETE for cdn/ objects
+#
+# Arquivos de /cdn/ são imutáveis (identificados por sysid do ServiceNow).
+# Não há invalidação de conteúdo — apenas gestão de ciclo de vida por custo.
+#
+# Fluxo de tiers (gerenciado 100% pelo S3, sem Lambda):
+#   0 dias      → INTELLIGENT_TIERING (enrolado no IT)
+#   30 dias sem acesso  → Infrequent Access tier  (-40% custo vs STANDARD)
+#   90 dias sem acesso  → Archive Instant Access  (-68% custo, acesso instantâneo)
+#   Se acessado em qualquer tier → volta para Frequent Access automaticamente
+#   var.s3_cache_cleanup_days → DELETE (default 365 dias)
+#
+# Archive Access e Deep Archive NÃO são habilitados: exigem restore (minutos/horas),
+# incompatível com CDN que precisa de acesso instantâneo.
 resource "aws_s3_bucket_lifecycle_configuration" "media" {
   bucket = aws_s3_bucket.media.id
 
   rule {
-    id     = "cleanup-old-cache"
+    id     = "cdn-intelligent-tiering"
     status = "Enabled"
 
     filter {
       prefix = "cdn/"
     }
 
-    # Expire objects after configured days (default: 90)
+    # Transição imediata para Intelligent-Tiering.
+    # IT monitora acesso e move automaticamente entre tiers (sem Lambda).
+    transition {
+      days          = 0
+      storage_class = "INTELLIGENT_TIERING"
+    }
+
+    # DELETE após var.s3_cache_cleanup_days (default 365).
+    # Força redownload do ServiceNow se o arquivo for requisitado novamente.
     expiration {
       days = var.s3_cache_cleanup_days
+    }
+
+    # Limpa uploads multipart incompletos (ex: Lambda morreu no meio do upload).
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
     }
   }
 }
@@ -69,6 +95,29 @@ resource "aws_cloudfront_origin_access_control" "oac" {
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
+}
+
+# OAC for Lambda Function URL — CloudFront signs every request with SigV4.
+# Lambda URL auth_type must be AWS_IAM; direct calls return 403.
+resource "aws_cloudfront_origin_access_control" "lambda_oac" {
+  count                             = local.has_lambda_origin && var.lambda_function_arn != "" ? 1 : 0
+  name                              = "${var.bucket_name}-lambda-oac"
+  description                       = "OAC for Lambda Function URL — restricts invocation to this CloudFront distribution only"
+  origin_access_control_origin_type = "lambda"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
+}
+
+# Grant CloudFront permission to invoke the Lambda Function URL.
+# The source_arn condition ensures ONLY this distribution can invoke it.
+resource "aws_lambda_permission" "cloudfront_invoke" {
+  count                  = local.has_lambda_origin && var.lambda_function_arn != "" ? 1 : 0
+  statement_id           = "AllowCloudFrontInvoke"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = var.lambda_function_arn
+  principal              = "cloudfront.amazonaws.com"
+  source_arn             = aws_cloudfront_distribution.media.arn
+  function_url_auth_type = "AWS_IAM"
 }
 
 # Custom cache policy for media with error caching control
@@ -144,11 +193,14 @@ resource "aws_cloudfront_distribution" "media" {
   }
 
   # Lambda Origin (condicional)
+  # origin_access_control_id → CloudFront assina cada request com SigV4 (OAC).
+  # Lambda URL com AWS_IAM auth rejeita qualquer chamada direta (403).
   dynamic "origin" {
     for_each = local.has_lambda_origin ? [1] : []
     content {
-      domain_name = var.lambda_origin_domain
-      origin_id   = "lambda-origin"
+      domain_name              = var.lambda_origin_domain
+      origin_id                = "lambda-origin"
+      origin_access_control_id = length(aws_cloudfront_origin_access_control.lambda_oac) > 0 ? aws_cloudfront_origin_access_control.lambda_oac[0].id : null
 
       custom_origin_config {
         http_port              = 80

@@ -16,7 +16,7 @@ variable "package_type" {
   default     = "Zip"
 }
 
-variable "filename" {
+variable "file_name" {
   description = "Local file path to Lambda code (when using Zip with local file)"
   type        = string
   default     = ""
@@ -95,15 +95,21 @@ variable "create_function_url" {
 }
 
 variable "function_url_auth_type" {
-  description = "Auth type for Function URL (NONE or AWS_IAM)"
+  description = "Auth type for Function URL. AWS_IAM = only CloudFront OAC can invoke. NONE = public (insecure)."
   type        = string
-  default     = "NONE"
+  default     = "AWS_IAM"
 }
 
 variable "logs_retention_in_days" {
   description = "CloudWatch Logs retention in days for the Lambda log group"
   type        = number
   default     = 14
+}
+
+variable "enable_xray" {
+  description = "Enable AWS X-Ray active tracing (captures cold start + invocation segments without SDK instrumentation). Default false."
+  type        = bool
+  default     = false
 }
 
 variable "tags" {

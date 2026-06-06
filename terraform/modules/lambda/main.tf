@@ -8,14 +8,21 @@ resource "aws_lambda_function" "zip" {
   architectures = [var.architecture]
 
   # Use filename if provided, otherwise fall back to S3 (for backward compatibility)
-  filename         = var.filename != "" ? var.filename : null
-  s3_bucket        = var.filename == "" ? var.s3_bucket : null
-  s3_key           = var.filename == "" ? var.s3_key : null
-  source_code_hash = var.filename != "" ? filebase64sha256(var.filename) : null
+  filename         = var.file_name != "" ? var.file_name : null
+  s3_bucket        = var.file_name == "" ? var.s3_bucket : null
+  s3_key           = var.file_name == "" ? var.s3_key : null
+  source_code_hash = var.file_name != "" ? filebase64sha256(var.file_name) : null
 
   memory_size = var.memory_size
   timeout     = var.timeout
   publish     = var.publish
+
+  dynamic "tracing_config" {
+    for_each = var.enable_xray ? [1] : []
+    content {
+      mode = "Active"
+    }
+  }
 
   environment {
     variables = var.environment
@@ -36,6 +43,13 @@ resource "aws_lambda_function" "image" {
   memory_size = var.memory_size
   timeout     = var.timeout
   publish     = var.publish
+
+  dynamic "tracing_config" {
+    for_each = var.enable_xray ? [1] : []
+    content {
+      mode = "Active"
+    }
+  }
 
   environment {
     variables = var.environment

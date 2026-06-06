@@ -10,7 +10,7 @@ import (
 func TestFetchPayloadValidation(t *testing.T) {
 	ctx := context.Background()
 
-	_, err := FetchPayload(ctx, "", "us-east-1")
+	_, err := FetchPayload(ctx, "")
 	if err == nil {
 		t.Error("expected error for missing secret name")
 	}

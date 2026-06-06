@@ -29,9 +29,9 @@ variable "s3_cdn_path" {
 }
 
 variable "s3_cache_cleanup_days" {
-  description = "Days before S3 lifecycle removes cached objects"
+  description = "Days before permanently deleting cached objects from S3 /cdn/. Intelligent-Tiering manages hot/cold tiers automatically before this date."
   type        = number
-  default     = 90
+  default     = 365
 }
 
 variable "enable_origin_shield" {
@@ -134,9 +134,9 @@ variable "lambda_create_function_url" {
 }
 
 variable "lambda_function_url_auth_type" {
-  description = "Function URL auth type (NONE or AWS_IAM)"
+  description = "Function URL auth type. AWS_IAM = only CloudFront OAC can invoke (recommended). NONE = public."
   type        = string
-  default     = "NONE"
+  default     = "AWS_IAM"
 }
 
 variable "lambda_logs_retention_in_days" {
@@ -173,6 +173,24 @@ variable "lambda_handler" {
   description = "Lambda handler"
   type        = string
   default     = "main"
+}
+
+variable "enable_xray" {
+  description = "Enable AWS X-Ray active tracing on Lambda. Captures cold start + invocation duration without SDK changes. Default false — enable in prod."
+  type        = bool
+  default     = false
+}
+
+variable "enable_alarms" {
+  description = "Create CloudWatch metric alarms for Lambda and CloudFront with SNS notifications. Default false — enable in prod."
+  type        = bool
+  default     = false
+}
+
+variable "alarm_email" {
+  description = "Email address for CloudWatch alarm SNS notifications. Leave empty to create the topic without subscription."
+  type        = string
+  default     = ""
 }
 
 variable "enable_secrets" {

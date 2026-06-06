@@ -9,15 +9,15 @@ import (
 )
 
 // FetchPayload retrieves SecretPayload from AWS Secrets Manager.
-// region should be provided; defaults to us-east-1 if empty.
-func FetchPayload(ctx context.Context, secretName, region string) (*models.SecretPayload, error) {
+// Region is resolved automatically from the AWS_REGION environment variable
+// (set by Lambda runtime). No explicit region configuration needed when
+// Lambda and Secrets Manager are in the same region.
+func FetchPayload(ctx context.Context, secretName string) (*models.SecretPayload, error) {
 	if secretName == "" {
 		return nil, fmt.Errorf("secret name required")
 	}
-	if region == "" {
-		return nil, fmt.Errorf("AWS region required")
-	}
-	secretsAPI, err := secretaws.NewSecretAPI(secretaws.WithRegion(region))
+	// AWS SDK Go v2 resolves region from AWS_REGION env var automatically.
+	secretsAPI, err := secretaws.NewSecretAPI()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create secrets API: %w", err)
 	}
