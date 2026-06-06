@@ -8,14 +8,21 @@ resource "aws_lambda_function" "zip" {
   architectures = [var.architecture]
 
   # Use filename if provided, otherwise fall back to S3 (for backward compatibility)
-  filename         = var.filename != "" ? var.filename : null
-  s3_bucket        = var.filename == "" ? var.s3_bucket : null
-  s3_key           = var.filename == "" ? var.s3_key : null
-  source_code_hash = var.filename != "" ? filebase64sha256(var.filename) : null
+  filename         = var.file_name != "" ? var.file_name : null
+  s3_bucket        = var.file_name == "" ? var.s3_bucket : null
+  s3_key           = var.file_name == "" ? var.s3_key : null
+  source_code_hash = var.file_name != "" ? filebase64sha256(var.file_name) : null
 
   memory_size = var.memory_size
   timeout     = var.timeout
   publish     = var.publish
+
+  dynamic "tracing_config" {
+    for_each = var.enable_xray ? [1] : []
+    content {
+      mode = "Active"
+    }
+  }
 
   environment {
     variables = var.environment
@@ -37,6 +44,13 @@ resource "aws_lambda_function" "image" {
   timeout     = var.timeout
   publish     = var.publish
 
+  dynamic "tracing_config" {
+    for_each = var.enable_xray ? [1] : []
+    content {
+      mode = "Active"
+    }
+  }
+
   environment {
     variables = var.environment
   }
@@ -52,13 +66,14 @@ resource "aws_cloudwatch_log_group" "lambda" {
   tags              = var.tags
 }
 
+locals {
+  lambda = var.create ? try(aws_lambda_function.zip[0], aws_lambda_function.image[0]) : null
+}
+
 resource "aws_lambda_function_url" "this" {
   count = var.create && var.create_function_url ? 1 : 0
 
-  function_name      = var.create ? try(aws_lambda_function.zip[0].function_name, aws_lambda_function.image[0].function_name) : ""
+  # count já garante var.create == true aqui, então local.lambda nunca é null.
+  function_name      = local.lambda.function_name
   authorization_type = var.function_url_auth_type
-}
-
-locals {
-  lambda = var.create ? try(aws_lambda_function.zip[0], aws_lambda_function.image[0]) : null
 }

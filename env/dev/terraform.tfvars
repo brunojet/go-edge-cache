@@ -14,7 +14,6 @@ acm_certificate_arn = "arn:aws:acm:us-east-1:845281339908:certificate/320106db-5
 # Signed URLs configuration
 # Reference the existing keygroup provisioned in the other project
 enable_signed_urls                 = true
-existing_cloudfront_key_group_name = "go-edge-key-group"
 existing_cloudfront_key_group_id   = "33bd9f09-5f1c-4976-806a-0fb5b8b70241"
 
 # Tags
@@ -33,18 +32,19 @@ lambda_timeout             = 60             # 5 minutes for 900MB uploads with s
 lambda_package_type        = "Zip"
 lambda_publish             = false
 lambda_create_function_url = true           # Enable Function URL for CloudFront
-lambda_function_url_auth_type = "NONE"      # Public, CloudFront signed with OAC
+lambda_function_url_auth_type = "AWS_IAM"   # CloudFront OAC only — direct calls return 403
 
 # Lambda environment variables (for configuration)
 lambda_environment = {
-  S3_BUCKET = "brunojet-media-proxy-dev"
-  SECRET_NAME = "/go-edge-key-management/rotator"
+  S3_BUCKET         = "brunojet-media-proxy-dev"
+  SECRET_NAME       = "/go-edge-key-management/rotator"
   CLOUDFRONT_DOMAIN = "media.brunojet.com.br"
-  TM_CONCURRENCY = "1"                     # Sequential processing for stability
-  TM_PART_SIZE = "26214400"                 # 25MB parts (5x default 5MB - conservative)
-  TM_THRESHOLD = "52428800"                 # 50MB multipart threshold (5x default 10MB)
+  TM_CONCURRENCY    = "1"        # Sequential processing for stability
+  TM_PART_SIZE      = "26214400" # 25MB parts
+  TM_THRESHOLD      = "52428800" # 50MB multipart threshold
+  MAX_FILE_SIZE_MB  = "256"      # Rejects files > 256MB before download (ServiceNow = all-or-nothing)
 }
 
 # S3 Cache Settings
 s3_cdn_path           = "/cdn"
-s3_cache_cleanup_days = 90
+s3_cache_cleanup_days = 365

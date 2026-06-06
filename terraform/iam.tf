@@ -48,3 +48,12 @@ module "iam_lambda" {
 	}) : ""
 	tags = var.tags
 }
+
+# X-Ray: attach AWSXRayDaemonWriteAccess only when X-Ray tracing is enabled.
+# Harmlessly absent when enable_xray = false — no cost, no permissions granted.
+resource "aws_iam_role_policy_attachment" "lambda_xray" {
+  count = var.enable_lambda && var.enable_xray ? 1 : 0
+
+  role       = module.iam_lambda.role_name
+  policy_arn = "arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess"
+}

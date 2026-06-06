@@ -25,7 +25,7 @@ func TestSignURLValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := SignURL(ctx, tt.domain, tt.path, tt.secretName, "us-east-1", 3600)
+			_, err := SignURL(ctx, tt.domain, tt.path, tt.secretName, 3600)
 			if err == nil {
 				t.Errorf("expected error for %s", tt.name)
 			}

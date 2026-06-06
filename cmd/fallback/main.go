@@ -4,13 +4,16 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -23,23 +26,23 @@ import (
 
 const (
 	defaultS3Bucket         = "brunojet-media-proxy-dev"
-	defaultAWSRegion        = "us-east-1"
 	defaultCloudFrontDomain = "media.brunojet.com.br"
 	defaultSecretName       = "/go-edge-key-management/rotator" //nolint:gosec // Path to AWS Secrets Manager, not a credential
 	defaultTMConcurrency    = 1
 	defaultTMPartSize       = 26214400 // 25MB
 	defaultTMThreshold      = 52428800 // 50MB
 	urlSignatureTTL         = 900      // 15 minutes
-	defaultLockTTL          = 60
-	defaultLockWaitTimeout  = 70
+	defaultLockTTL          = 45       // S3 lock TTL (seconds) — must be < Lambda timeout
+	defaultLockWaitTimeout  = 50       // max seconds to wait for lock — must be < Lambda timeout
+	defaultMaxFileSizeMB    = 256      // max file size accepted from ServiceNow origin
 )
 
 var (
 	bucket           storagecontracts.BucketAdapter
 	s3BucketName     string
-	awsRegion        string
 	cloudFrontDomain string
 	secretName       string
+	maxFileSizeBytes int64
 	statusCodeRegex  = regexp.MustCompile(`StatusCode:\s*(\d+)`)
 )
 
@@ -128,21 +131,36 @@ func init() {
 
 	cloudFrontDomain = getEnvOrDefault("CLOUDFRONT_DOMAIN", defaultCloudFrontDomain)
 	secretName = getEnvOrDefault("SECRET_NAME", defaultSecretName) //nolint:gosec // Path to external secret, not a credential
+
+	maxFileSizeMB := getEnvOrDefaultInt("MAX_FILE_SIZE_MB", defaultMaxFileSizeMB)
+	maxFileSizeBytes = int64(maxFileSizeMB) * 1024 * 1024
 }
 
 // Handle is the Lambda handler entry point.
 // 100% STREAMING: Download → Upload (NO buffering in between)
 func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.LambdaFunctionURLResponse, error) {
 	path := req.RawPath
-	// Acquire distributed lock (prevent concurrent updates)
+
+	// ctx já carrega o deadline da Lambda (runtime Go injeta automaticamente).
+	// SIGTERM propaga via signal.NotifyContext no main().
+	// defaultLockWaitTimeout < Lambda timeout garante tempo para o trabalho após o lock.
 	lockKey := fmt.Sprintf("cdn%s", path)
 	lockErr := bucket.GetLockWait(ctx, lockKey, defaultLockTTL*time.Second, defaultLockWaitTimeout*time.Second)
 	if lockErr != nil {
-		message := fmt.Sprintf("lock acquire failed for %s: %v", path, lockErr)
-		return errorResponse(http.StatusTooManyRequests, message), nil
+		switch {
+		case errors.Is(lockErr, context.DeadlineExceeded):
+			return errorResponse(http.StatusTooManyRequests, fmt.Sprintf("lock wait timeout for %s", path)), nil
+		case errors.Is(lockErr, context.Canceled):
+			return errorResponse(http.StatusServiceUnavailable, fmt.Sprintf("request canceled for %s", path)), nil
+		default:
+			return errorResponse(http.StatusTooManyRequests, fmt.Sprintf("lock acquire failed for %s: %v", path, lockErr)), nil
+		}
 	}
 	defer func() {
-		if releaseErr := bucket.ReleaseLock(ctx, lockKey); releaseErr != nil {
+		// ctx pode estar cancelado (timeout ou SIGTERM) — usa ctx fresco para o release.
+		releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if releaseErr := bucket.ReleaseLock(releaseCtx, lockKey); releaseErr != nil {
 			log.Printf("lock release failed for %s: %v", path, releaseErr)
 		}
 	}()
@@ -150,6 +168,12 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 	cachedContentType, cacheExists := isCached(ctx, path)
 	if cacheExists {
 		return handleResponse(ctx, "cached", path, cachedContentType)
+	}
+	// Validate origin before downloading: checks existence (404) and size limit (413).
+	// ServiceNow does not support Range requests — download is all-or-nothing.
+	// A single HeadObject here avoids a wasted GetObject when the file is missing or too large.
+	if originErr := checkOrigin(ctx, path); originErr != nil {
+		return errorResponse(originErr.StatusCode, originErr.Error.Error()), nil
 	}
 	// Fetch from S3 origin (root path - no /cdn prefix)
 	originBody, contentType, bucketErr := fetchFromS3Origin(ctx, path)
@@ -168,6 +192,30 @@ func Handle(ctx context.Context, req *events.LambdaFunctionURLRequest) (*events.
 		return errorResponse(bucketErr.StatusCode, bucketErr.Error.Error()), nil
 	}
 	return handleResponse(ctx, "retrieved", path, contentType)
+}
+
+// checkOrigin validates the S3 root object (ServiceNow proxy) before downloading.
+// Returns 404 if the file does not exist, 413 if it exceeds maxFileSizeBytes.
+// A single HeadObject here prevents a wasted GetObject call for missing or oversized files.
+// ServiceNow does not support Range requests — download is all-or-nothing.
+func checkOrigin(ctx context.Context, path string) *BucketError {
+	s3Key := path
+	if s3Key != "" && s3Key[0] == '/' {
+		s3Key = s3Key[1:]
+	}
+	objInfo := &storagecontracts.ObjectInfo{}
+	if err := bucket.HeadObject(ctx, s3Key, objInfo); err != nil {
+		return extractS3StatusCode(err) // 404 Not Found or other S3 error
+	}
+	if maxFileSizeBytes > 0 && objInfo.Size > maxFileSizeBytes {
+		sizeMB := objInfo.Size / (1024 * 1024)
+		maxMB := maxFileSizeBytes / (1024 * 1024)
+		return &BucketError{
+			StatusCode: http.StatusRequestEntityTooLarge,
+			Error:      fmt.Errorf("file too large: %d MB (max %d MB)", sizeMB, maxMB),
+		}
+	}
+	return nil
 }
 
 // fetchFromS3Origin fetches object from S3 root using BucketAdapter
@@ -223,7 +271,7 @@ func isCached(ctx context.Context, path string) (string, bool) {
 }
 
 func handleResponse(ctx context.Context, mode, path, contentType string) (*events.LambdaFunctionURLResponse, error) {
-	signedURL, err := cdn.SignURL(ctx, cloudFrontDomain, path, secretName, awsRegion, urlSignatureTTL)
+	signedURL, err := cdn.SignURL(ctx, cloudFrontDomain, path, secretName, urlSignatureTTL)
 	if err != nil {
 		detail := fmt.Sprintf("URL signing failed for %s file %s: %v", mode, path, err)
 		return errorResponseNoCache(http.StatusInternalServerError, detail), nil
@@ -278,5 +326,12 @@ func errorResponseNoCache(statusCode int, detail string) *events.LambdaFunctionU
 }
 
 func main() {
-	lambda.Start(Handle)
+	// ctx raiz cancela quando SIGTERM chegar (Lambda runtime desligando).
+	// Esse ctx é pai de todos os ctx de invocação — garante propagação
+	// para GetLockWait, S3 e Secrets Manager mesmo em shutdown do runtime.
+	// SIGKILL não pode ser capturado; temos ~2s entre SIGTERM e SIGKILL.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+	defer stop()
+
+	lambda.StartWithOptions(Handle, lambda.WithContext(ctx))
 }

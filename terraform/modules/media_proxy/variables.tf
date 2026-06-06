@@ -9,6 +9,12 @@ variable "lambda_origin_domain" {
   default     = null
 }
 
+variable "lambda_function_arn" {
+  description = "Lambda function ARN — used to grant CloudFront OAC permission to invoke the Function URL (AWS_IAM auth). Leave empty if not using OAC."
+  type        = string
+  default     = ""
+}
+
 variable "cloudfront_price_class" {
   description = "CloudFront price class"
   type        = string
@@ -22,9 +28,9 @@ variable "s3_cdn_path" {
 }
 
 variable "s3_cache_cleanup_days" {
-  description = "Days before removing cached objects from S3 (0 = disabled)"
+  description = "Days before permanently deleting cached objects from S3 /cdn/ (Intelligent-Tiering manages hot/cold automatically before this). Default 365."
   type        = number
-  default     = 90
+  default     = 365
 }
 
 variable "force_destroy" {

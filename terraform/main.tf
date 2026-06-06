@@ -16,11 +16,20 @@ provider "aws" {
 # Get current AWS account ID for ARN construction
 data "aws_caller_identity" "current" {}
 
+locals {
+  # Compute function name with same logic as module.lambda — needed to build a
+  # static ARN that does not depend on module output (avoids "known after apply"
+  # breaking count expressions in media_proxy when Lambda code changes).
+  lambda_function_name = var.lambda_function_name != "" ? var.lambda_function_name : "${var.bucket_name}-origin-lambda"
+  lambda_function_arn  = var.enable_lambda ? "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.lambda_function_name}" : ""
+}
+
 module "media_proxy" {
   source = "./modules/media_proxy"
 
   bucket_name                 = var.bucket_name
-  lambda_origin_domain        = var.enable_lambda ? replace(replace(module.lambda.function_url, "https://", ""), "/", "") : var.lambda_origin_domain
+  lambda_origin_domain        = var.enable_lambda ? trimsuffix(trimprefix(module.lambda.function_url, "https://"), "/") : var.lambda_origin_domain
+  lambda_function_arn         = local.lambda_function_arn
   cloudfront_price_class      = var.cloudfront_price_class
   s3_cdn_path                 = var.s3_cdn_path
   s3_cache_cleanup_days       = var.s3_cache_cleanup_days
