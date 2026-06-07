@@ -73,7 +73,10 @@ locals {
 resource "aws_lambda_function_url" "this" {
   count = var.create && var.create_function_url ? 1 : 0
 
-  # count já garante var.create == true aqui, então local.lambda nunca é null.
-  function_name      = local.lambda.function_name
+  # Referencia o atributo específico (não o objeto inteiro via local.lambda):
+  # function_name = var.function_name, valor estável e conhecido mesmo quando a
+  # função é atualizada in-place. Usar local.lambda (objeto inteiro) tornava isto
+  # "known after apply" a cada mudança de código, forçando replace do Function URL.
+  function_name      = try(aws_lambda_function.zip[0].function_name, aws_lambda_function.image[0].function_name)
   authorization_type = var.function_url_auth_type
 }
