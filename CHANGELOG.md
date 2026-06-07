@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/brunojet/go-edge-cache/compare/v3.0.0...v3.0.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* **terraform:** stop Function URL replacement on lambda code change ([bdc3265](https://github.com/brunojet/go-edge-cache/commit/bdc3265ad7ec06818dd0edb74bcca29ea4147ded))
+
 ## [3.0.0](https://github.com/brunojet/go-edge-cache/compare/v2.0.0...v3.0.0) (2026-06-06)
 
 
